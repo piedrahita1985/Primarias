@@ -1,0 +1,3 @@
+{ "checkCECIF": [
+  {"id": 1, "fecha_creacion": "2026-04-14T20:24:00", "fecha_recepcion": "2026-04-14", "id_proveedor": 2, "no_orden_compra": "PRUEBA", "id_sustancia": 10, "lote": "LOTEPRUEBA", "cantidad": "100", "observacion_producto": "MELOMELO", "verificacion": {"nombre": "Si", "no_lote": "Si", "cantidad": "Si", "rotulo_identificacion": "Si", "fecha_fabricacion": "Si", "fecha_vencimiento": "Si", "fabricante": "Si", "rotulos_seguridad": "Si", "ficha_seguridad": "Si", "certificado_calidad": "Si", "golpes_roturas": "Si", "cumple_especificaciones": "Si"}, "observaciones": "", "id_usuario_aprobo": 1, "id_usuario_verifico": 2}
+] }

@@ -1,0 +1,12 @@
+{
+    "color_refuerzo":[
+    { "id": 1, "color_refuerzo": "AZUL" },
+    { "id": 2, "color_refuerzo": "ROJO - AZUL" },
+    { "id": 3, "color_refuerzo": "VERDE" },
+    { "id": 4, "color_refuerzo": "AZUL - BLANCO" },
+    { "id": 5, "color_refuerzo": "ROJO" },
+    { "id": 6, "color_refuerzo": "BLANCO" },
+    { "id": 7, "color_refuerzo": "VERDE" },
+    { "id": 8, "color_refuerzo": "VERDE - AZUL" }
+    ]
+}

@@ -1,0 +1,19 @@
+{
+  "tipos_salida": [
+    {
+      "id": 1,
+      "tipo_salida": "ANALISIS",
+      "estado": "HABILITADA"
+    },
+    {
+      "id": 2,
+      "tipo_salida": "CONSUMO",
+      "estado": "HABILITADA"
+    },
+    {
+      "id": 3,
+      "tipo_salida": "PRESTAMO",
+      "estado": "HABILITADA"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+    "unidad":[
+                
+    { "id": 1, "unidad": "mg" },
+    { "id": 2, "unidad": "Tab" },
+    { "id": 3, "unidad": "Ampollas" },
+    { "id": 4, "unidad": "g" }
+]
+        
+}

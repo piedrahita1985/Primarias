@@ -1,0 +1,8 @@
+{
+    "condicion_alm":[
+        {"id": 1, "condicion": "ALMACENAMIENTO A TEMPERATURA CONTROLADA (2-8°C)"},
+        {"id": 2, "condicion": "ALMACENAMIENTO A TEMPERATURA CONTROLADA (15-25°C)"},
+        {"id": 3, "condicion": "ALMACENAMIENTO A TEMPERATURA CONTROLADA (20-25°C)"},
+        {"id": 4, "condicion": "ALMACENAMIENTO A TEMPER  ATURA CONTROLADA (25-30°C)"}
+    ]
+}

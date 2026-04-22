@@ -1,0 +1,5 @@
+{ "recibos": [
+  {"id": 1, "fecha": "2026-04-14 20:28:15", "id_prestamo": 1, "id_sustancia": 10, "id_usuario_presta": 1, "id_usuario_recibe": 2, "cantidad": 10.0, "recibio": true, "estado": "ACEPTADO", "observacion": "ok", "id_salida": 2},
+  {"id": 2, "fecha": "2026-04-14 20:36:49", "id_prestamo": 2, "id_sustancia": 1, "id_usuario_presta": 1, "id_usuario_recibe": 2, "cantidad": 2.0, "recibio": true, "estado": "ACEPTADO", "observacion": "RECIBIDO OK", "id_salida": 4},
+  {"id": 3, "fecha": "2026-04-22 15:36:19", "id_prestamo": 3, "id_sustancia": 1, "id_usuario_presta": 1, "id_usuario_recibe": 2, "cantidad": 1.0, "recibio": true, "estado": "ACEPTADO", "observacion": "MAL ESTADO", "id_salida": 7}
+] }
