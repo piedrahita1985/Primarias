@@ -29,22 +29,12 @@ def agregar(record, usuario="SISTEMA"):
     common.guardar_salidas(rows)
     inv.guardar_snapshot()
 
-    cambios = [
-        {"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"},
-        {"campo": "cantidad", "valor_anterior": "0", "valor_nuevo": nuevo.get("cantidad", "")},
-    ]
-    if nuevo.get("id_entrada") is not None:
-        cambios.append({
-            "campo": "id_entrada",
-            "valor_anterior": "",
-            "valor_nuevo": nuevo.get("id_entrada", ""),
-        })
-
+    resumen = f"cant={nuevo.get('cantidad', '')} | entrada={nuevo.get('id_entrada', '')}"
     bit.registrar_campos(
         tipo_operacion="SALIDAS-CREAR",
         id_registro=nuevo.get("id"),
         usuario=usuario,
-        cambios=cambios,
+        cambios=[{"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": f"CREADO | {resumen}"}],
     )
     return nuevo
 

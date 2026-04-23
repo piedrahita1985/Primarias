@@ -3,7 +3,7 @@ from tkinter import ttk
 
 from config.config import COLORS
 from logica import bitacora_logica as bit
-from UI._mov_utils import draw_title, get_date_value, make_date_input
+from UI._mov_utils import apply_default_window, attach_treeview_sorting, draw_title, get_date_value, make_date_input
 
 
 def open_window(master):
@@ -15,8 +15,7 @@ class BitacoraWindow(tk.Toplevel):
         super().__init__(master)
         self.title("Sistema de Gestion - Bitacora")
         self.configure(bg=COLORS["secondary"])
-        self.geometry("1200x760")
-        self.minsize(980, 620)
+        apply_default_window(self)
 
         self.v_modulo = tk.StringVar()
         self.v_tipo_operacion = tk.StringVar()
@@ -28,6 +27,16 @@ class BitacoraWindow(tk.Toplevel):
         draw_title(self, "Sistema de Gestion - Bitacora")
         self._build_ui()
         self._load_default()
+
+    @staticmethod
+    def _split_tipo_operacion(tipo_operacion):
+        text = str(tipo_operacion or "").strip().upper()
+        if not text:
+            return "", ""
+        if "-" in text:
+            op, accion = text.split("-", 1)
+            return op, accion
+        return text, ""
 
     def _build_ui(self):
         wrap = tk.LabelFrame(
@@ -64,12 +73,13 @@ class BitacoraWindow(tk.Toplevel):
         self._button(top, "Filtrar", COLORS["primary"], self._apply_filters).pack(side="left", padx=(0, 6))
         self._button(top, "Borrar filtros", "#B0B0B0", self._clear_filters).pack(side="left")
 
-        cols = ("fecha_hora", "usuario", "tipo_operacion", "id_registro", "campo", "valor_anterior", "valor_nuevo")
+        cols = ("fecha_hora", "usuario", "operacion", "accion", "id_registro", "campo", "valor_anterior", "valor_nuevo")
         self.tree = ttk.Treeview(wrap, columns=cols, show="headings")
         for key, title, width in [
             ("fecha_hora", "Fecha/Hora", 150),
             ("usuario", "Usuario", 110),
-            ("tipo_operacion", "Tipo Operacion", 160),
+            ("operacion", "Operación", 130),
+            ("accion", "Acción", 110),
             ("id_registro", "ID Registro", 95),
             ("campo", "Campo", 160),
             ("valor_anterior", "Valor Anterior", 250),
@@ -77,6 +87,7 @@ class BitacoraWindow(tk.Toplevel):
         ]:
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, anchor="center")
+        attach_treeview_sorting(self.tree)
 
         self.tree.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
@@ -113,13 +124,15 @@ class BitacoraWindow(tk.Toplevel):
     def _fill(self, rows):
         self.tree.delete(*self.tree.get_children())
         for r in rows:
+            operacion, accion = self._split_tipo_operacion(r.get("tipo_operacion", ""))
             self.tree.insert(
                 "",
                 "end",
                 values=(
                     r.get("fecha_hora", ""),
                     r.get("usuario", ""),
-                    r.get("tipo_operacion", ""),
+                    operacion,
+                    accion,
                     r.get("id_registro", ""),
                     r.get("campo", ""),
                     r.get("valor_anterior", ""),

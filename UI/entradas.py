@@ -6,9 +6,12 @@ from logica import entradas_mov_logica as ent
 from logica import inventario_mov_logica as inv
 from logica import movimientos_common as common
 from UI._mov_utils import (
+    attach_treeview_sorting,
+    apply_default_window,
     draw_title,
     get_date_value,
     make_date_input,
+    make_date_widget,
     make_labeled_entry,
     only_numeric,
     upper_text_var,
@@ -59,6 +62,7 @@ class _ChecklistDialog(tk.Toplevel):
         _btn("CECIF", COLORS["primary"], self._open_cecif).pack(side="left", padx=8)
         _btn("Cliente", "#2EAF62", self._open_cliente).pack(side="left", padx=8)
         _btn("Omitir", "#6C757D", self._open_entrada).pack(side="left", padx=8)
+        _btn("Salir", "#6C757D", self.destroy).pack(side="left", padx=8)
 
     def _open_cecif(self):
         self.destroy()
@@ -82,8 +86,7 @@ class EntradasWindow(tk.Toplevel):
         self.username = getattr(master, "username", "SISTEMA")
         self.title("Sistema de Gestion - Entradas")
         self.configure(bg=COLORS["secondary"])
-        self.geometry("1400x900")
-        self.minsize(1200, 760)
+        apply_default_window(self, min_width=1100, min_height=700)
 
         self._maestras = common.cargar_maestras()
         self._sustancias_by_codigo = common.map_sustancia_by_codigo(self._maestras["sustancias"])
@@ -144,9 +147,6 @@ class EntradasWindow(tk.Toplevel):
         self.v_ficha_seg = tk.BooleanVar(value=False)
         self.v_factura_compra = tk.BooleanVar(value=False)
 
-        self.h_fecha = tk.StringVar()
-        self.h_desde = tk.StringVar()
-        self.h_hasta = tk.StringVar()
         self.h_codigo = tk.StringVar()
         self.h_lote = tk.StringVar()
 
@@ -163,7 +163,7 @@ class EntradasWindow(tk.Toplevel):
         draw_title(self, "Sistema de Gestion - Entradas")
 
         top = tk.Frame(self, bg=COLORS["secondary"])
-        top.pack(fill="both", expand=True, padx=10, pady=(10, 6))
+        top.pack(fill="x", expand=False, padx=10, pady=(10, 6))
         top.grid_columnconfigure(0, weight=1)
         top.grid_rowconfigure(0, weight=1)
 
@@ -184,7 +184,8 @@ class EntradasWindow(tk.Toplevel):
         form = tk.Frame(canvas, bg=COLORS["secondary"])
 
         form.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=form, anchor="nw")
+        win_id = canvas.create_window((0, 0), window=form, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win_id, width=e.width))
         canvas.configure(yscrollcommand=ysb.set)
 
         canvas.grid(row=0, column=0, sticky="nsew")
@@ -192,14 +193,22 @@ class EntradasWindow(tk.Toplevel):
 
         self._build_sections(form)
 
-        self._build_history()
-
         bar = tk.Frame(self, bg=COLORS["secondary"])
-        bar.pack(fill="x", padx=10, pady=(0, 10))
-
-        self._button(bar, "Nuevo", "#6C757D", self._clear_form).pack(side="left", padx=(0, 6))
-        self._button(bar, "Guardar", COLORS["primary"], self._save).pack(side="right", padx=6)
+        bar.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+        self.lbl_status = tk.Label(
+            bar,
+            text="Listo para registrar entrada.",
+            bg=COLORS["secondary"],
+            fg=COLORS["text_muted"],
+            font=("Segoe UI", 9),
+            anchor="w",
+        )
+        self.lbl_status.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self._button(bar, "Salir", "#6C757D", self.destroy).pack(side="right")
+        self._button(bar, "Guardar", COLORS["primary"], self._save).pack(side="right", padx=(0, 6))
+        self._button(bar, "Nuevo", "#6C757D", self._clear_form).pack(side="left", padx=(0, 6))
+
+        self._build_history()
 
     def _build_history(self):
         hist = tk.LabelFrame(
@@ -209,22 +218,25 @@ class EntradasWindow(tk.Toplevel):
             fg=COLORS["primary_dark"],
             font=("Segoe UI", 10, "bold"),
         )
-        hist.pack(fill="both", expand=False, padx=10, pady=(0, 8))
+        hist.pack(fill="both", expand=True, padx=10, pady=(0, 8))
 
         ftop = tk.Frame(hist, bg=COLORS["secondary"])
-        ftop.pack(fill="x", padx=6, pady=6)
-
-        tk.Label(ftop, text="Fecha:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_fecha, width=12).pack(side="left", padx=(0, 10))
-        tk.Label(ftop, text="Desde:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_desde, width=12).pack(side="left", padx=(0, 10))
-        tk.Label(ftop, text="Hasta:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_hasta, width=12).pack(side="left", padx=(0, 10))
-        tk.Label(ftop, text="Codigo:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_codigo, width=12).pack(side="left", padx=(0, 10))
-        tk.Label(ftop, text="Lote:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_lote, width=12).pack(side="left", padx=(0, 10))
-
+        ftop.pack(fill="x", padx=6, pady=(6, 4))
+        _e_style = dict(bg=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 10),
+                        relief="flat", bd=0, highlightthickness=1,
+                        highlightbackground=COLORS["border_soft"], highlightcolor=COLORS["primary"])
+        def _lbl(t):
+            return tk.Label(ftop, text=t, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold"))
+        _lbl("Desde:").pack(side="left", padx=(0, 3))
+        self.h_w_desde = make_date_widget(ftop)
+        self.h_w_desde.pack(side="left", padx=(0, 10))
+        _lbl("Hasta:").pack(side="left", padx=(0, 3))
+        self.h_w_hasta = make_date_widget(ftop)
+        self.h_w_hasta.pack(side="left", padx=(0, 10))
+        _lbl("Codigo:").pack(side="left", padx=(0, 3))
+        tk.Entry(ftop, textvariable=self.h_codigo, width=10, **_e_style).pack(side="left", padx=(0, 10))
+        _lbl("Lote:").pack(side="left", padx=(0, 3))
+        tk.Entry(ftop, textvariable=self.h_lote, width=10, **_e_style).pack(side="left", padx=(0, 10))
         self._button(ftop, "Filtrar", COLORS["primary"], self._apply_filters).pack(side="left", padx=(0, 6))
         self._button(ftop, "Borrar filtros", "#B0B0B0", self._clear_filters).pack(side="left")
 
@@ -242,6 +254,7 @@ class EntradasWindow(tk.Toplevel):
         ]:
             self.h_tree.heading(key, text=title)
             self.h_tree.column(key, width=width, anchor="center")
+        attach_treeview_sorting(self.h_tree)
         self.h_tree.pack(fill="both", expand=True, padx=6)
 
         ysb = ttk.Scrollbar(hist, orient="vertical", command=self.h_tree.yview)
@@ -275,14 +288,31 @@ class EntradasWindow(tk.Toplevel):
         tk.Label(sec1, text="Lote", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=3, sticky="w", padx=8, pady=(6, 2))
         self.cb_lote = ttk.Combobox(sec1, textvariable=self.v_lote, values=[], state="normal", font=("Segoe UI", 10))
         self.cb_lote.grid(row=1, column=3, sticky="ew", padx=8, pady=(0, 8))
-        make_labeled_entry(sec1, "Catalogo", self.v_catalogo, 2, 3)
+        make_labeled_entry(sec1, "Catalogo", self.v_catalogo, 2, 3, width=18)
 
         make_labeled_entry(sec1, "Nombre del Producto", self.v_nombre, 2, 0, read_only=True)
         make_labeled_entry(sec1, "Propiedad", self.v_propiedad, 2, 1, read_only=True)
         make_labeled_entry(sec1, "Codigo Sistema", self.v_codigo_sistema, 2, 2, read_only=True)
 
-        sec2 = self._section(parent, "Detalles del Producto")
-        for c in range(6):
+        # Bloque doble para evitar scroll vertical: detalles a la izquierda, costos/facturación a la derecha.
+        details_wrap = tk.Frame(parent, bg=COLORS["secondary"])
+        details_wrap.pack(fill="x", padx=6, pady=6)
+        details_wrap.grid_columnconfigure(0, weight=3)
+        details_wrap.grid_columnconfigure(1, weight=2)
+
+        sec2 = tk.LabelFrame(
+            details_wrap,
+            text="  Detalles del Producto  ",
+            bg=COLORS["secondary"],
+            fg=COLORS["primary_dark"],
+            font=("Segoe UI", 10, "bold"),
+            bd=1,
+            relief="groove",
+            padx=6,
+            pady=4,
+        )
+        sec2.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        for c in range(5):
             sec2.grid_columnconfigure(c, weight=1)
 
         e_cantidad = make_labeled_entry(sec2, "Cantidad", self.v_cantidad, 0, 0)
@@ -295,13 +325,24 @@ class EntradasWindow(tk.Toplevel):
 
         e_potencia = make_labeled_entry(sec2, "Potencia", self.v_potencia, 0, 4)
 
-        sec3 = self._section(parent, "Costos y Facturacion")
+        sec3 = tk.LabelFrame(
+            details_wrap,
+            text="  Costos y Facturación  ",
+            bg=COLORS["secondary"],
+            fg=COLORS["primary_dark"],
+            font=("Segoe UI", 10, "bold"),
+            bd=1,
+            relief="groove",
+            padx=6,
+            pady=4,
+        )
+        sec3.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
         for c in range(3):
             sec3.grid_columnconfigure(c, weight=1)
 
-        e_costo_u = make_labeled_entry(sec3, "Costo Unitario", self.v_costo_unitario, 0, 0)
-        make_labeled_entry(sec3, "Costo Total", self.v_costo_total, 0, 1, read_only=True)
-        make_labeled_entry(sec3, "Factura", self.v_factura, 0, 2)
+        e_costo_u = make_labeled_entry(sec3, "Costo Unitario", self.v_costo_unitario, 0, 0, width=14)
+        make_labeled_entry(sec3, "Costo Total", self.v_costo_total, 0, 1, width=14, read_only=True)
+        make_labeled_entry(sec3, "Factura", self.v_factura, 0, 2, width=14)
 
         sec4 = self._section(parent, "Documentacion Tecnica")
         for c in range(4):
@@ -365,7 +406,7 @@ class EntradasWindow(tk.Toplevel):
         self.cb_color.grid(row=1, column=3, sticky="ew", padx=8, pady=(0, 8))
 
         tk.Label(sec5, text="Observaciones", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", padx=8, pady=(6, 2))
-        self.txt_obs = tk.Text(sec5, height=4, bg=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 10), relief="flat", bd=0, highlightthickness=1, highlightbackground=COLORS["border_soft"], highlightcolor=COLORS["primary"])
+        self.txt_obs = tk.Text(sec5, height=3, bg=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 10), relief="flat", bd=0, highlightthickness=1, highlightbackground=COLORS["border_soft"], highlightcolor=COLORS["primary"])
         self.txt_obs.grid(row=4, column=0, columnspan=4, sticky="ew", padx=8, pady=(0, 10))
         self.txt_obs.bind("<KeyRelease>", self._on_obs_upper)
 
@@ -385,7 +426,18 @@ class EntradasWindow(tk.Toplevel):
         return frame
 
     def _button(self, parent, text, bg, cmd):
-        return tk.Button(parent, text=text, bg=bg, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", bd=0, padx=10, pady=6, cursor="hand2", command=cmd)
+        return tk.Button(parent, text=text, bg=bg, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", bd=0, padx=12, pady=6, cursor="hand2", command=cmd)
+
+    def _set_status(self, text, is_error=False):
+        if hasattr(self, "lbl_status"):
+            self.lbl_status.configure(
+                text=text,
+                fg=COLORS["error"] if is_error else COLORS["text_muted"],
+            )
+
+    def _warn(self, text):
+        self._set_status(text, is_error=True)
+        messagebox.showwarning("Aviso", text, parent=self)
 
     def _on_obs_upper(self, _event=None):
         value = self.txt_obs.get("1.0", "end-1c")
@@ -581,46 +633,47 @@ class EntradasWindow(tk.Toplevel):
         return None
 
     def _set_date_widget(self, widget, value):
-        if not value:
-            return
         if hasattr(widget, "set_date"):
             try:
-                widget.set_date(value)
+                if value:
+                    widget.set_date(value)
+                else:
+                    widget.delete(0, "end")
                 return
             except Exception:
                 pass
         var = getattr(widget, "_fallback_var", None)
         if var is not None:
-            var.set(value)
+            var.set(value or "")
 
     def _save(self):
         codigo = self.v_codigo.get().strip()
         sustancia = self._sustancias_by_codigo.get(codigo)
         if sustancia is None:
-            messagebox.showwarning("Aviso", "Seleccione un codigo de uso valido.", parent=self)
+            self._warn("Seleccione un codigo de uso valido.")
             return
 
         if not self.v_lote.get().strip() or not self.v_catalogo.get().strip() or not self.v_cantidad.get().strip():
-            messagebox.showwarning("Aviso", "Lote, catalogo y cantidad son obligatorios.", parent=self)
+            self._warn("Lote, catalogo y cantidad son obligatorios.")
             return
 
         try:
             cantidad = float(self.v_cantidad.get().replace(",", "."))
         except ValueError:
-            messagebox.showwarning("Aviso", "Cantidad invalida.", parent=self)
+            self._warn("Cantidad invalida.")
             return
         if cantidad <= 0:
-            messagebox.showwarning("Aviso", "La cantidad debe ser mayor a 0.", parent=self)
+            self._warn("La cantidad debe ser mayor a 0.")
             return
 
         try:
             presentacion = float((self.v_presentacion.get() or "0").replace(",", "."))
         except ValueError:
-            messagebox.showwarning("Aviso", "Presentacion invalida.", parent=self)
+            self._warn("Presentacion invalida.")
             return
 
         if presentacion <= 0:
-            messagebox.showwarning("Aviso", "La presentacion debe ser mayor a 0.", parent=self)
+            self._warn("La presentacion debe ser mayor a 0.")
             return
 
         fecha_vencimiento = get_date_value(self.w_fecha_venc)
@@ -639,7 +692,7 @@ class EntradasWindow(tk.Toplevel):
 
         unidad = self.v_unidad.get().strip()
         if not unidad:
-            messagebox.showwarning("Aviso", "Seleccione la unidad.", parent=self)
+            self._warn("Seleccione la unidad.")
             return
 
         unidad_id = None
@@ -648,7 +701,7 @@ class EntradasWindow(tk.Toplevel):
                 unidad_id = u.get("id")
                 break
         if unidad_id is None:
-            messagebox.showwarning("Aviso", "Unidad invalida.", parent=self)
+            self._warn("Unidad invalida.")
             return
 
         tipo_entrada_id = None
@@ -657,12 +710,12 @@ class EntradasWindow(tk.Toplevel):
                 tipo_entrada_id = t.get("id")
                 break
         if tipo_entrada_id is None:
-            messagebox.showwarning("Aviso", "Seleccione un tipo de entrada valido.", parent=self)
+            self._warn("Seleccione un tipo de entrada valido.")
             return
 
         id_ubicacion = self._selected_id_ubicacion()
         if id_ubicacion is None:
-            messagebox.showwarning("Aviso", "Seleccione Ubicación y No. Caja válidos.", parent=self)
+            self._warn("Seleccione Ubicación y No. Caja válidos.")
             return
 
         propiedad = str(sustancia.get("propiedad", "")).strip().upper()
@@ -695,9 +748,11 @@ class EntradasWindow(tk.Toplevel):
 
         if self._editing_id is None:
             ent.agregar(record, usuario=self.username)
+            self._set_status("Entrada guardada correctamente.")
             messagebox.showinfo("Exito", "Entrada guardada correctamente.", parent=self)
         else:
             ent.actualizar(self._editing_id, record, usuario=self.username)
+            self._set_status("Entrada actualizada correctamente.")
             messagebox.showinfo("Exito", "Entrada actualizada correctamente.", parent=self)
 
         self._refresh_list()
@@ -734,6 +789,7 @@ class EntradasWindow(tk.Toplevel):
         self.cb_no_caja.configure(values=[], state="disabled")
         self.lbl_ubicacion_hint.configure(text="Primero elija ubicación para habilitar No. Caja")
         self.txt_obs.delete("1.0", "end")
+        self._set_status("Listo para registrar entrada.")
 
     def _refresh_list(self):
         return
@@ -772,9 +828,9 @@ class EntradasWindow(tk.Toplevel):
 
     def _apply_filters(self):
         rows = ent.filtrar(
-            fecha=self.h_fecha.get().strip(),
-            fecha_desde=self.h_desde.get().strip(),
-            fecha_hasta=self.h_hasta.get().strip(),
+            fecha="",
+            fecha_desde=get_date_value(self.h_w_desde),
+            fecha_hasta=get_date_value(self.h_w_hasta),
             codigo=self.h_codigo.get().strip(),
             lote=self.h_lote.get().strip(),
             maestras=self._maestras,
@@ -782,9 +838,8 @@ class EntradasWindow(tk.Toplevel):
         self._fill_history(rows)
 
     def _clear_filters(self):
-        self.h_fecha.set("")
-        self.h_desde.set("")
-        self.h_hasta.set("")
+        self._set_date_widget(self.h_w_desde, "")
+        self._set_date_widget(self.h_w_hasta, "")
         self.h_codigo.set("")
         self.h_lote.set("")
         self._load_history_default()

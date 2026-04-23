@@ -1,0 +1,3724 @@
+﻿
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\__init__.py ====================
+
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\bitacora_logica.py ====================
+
+from datetime import datetime
+
+from logica import movimientos_common as common
+
+
+def registrar(modulo, accion, id_registro, detalle="", usuario="SISTEMA"):
+    tipo = f"{str(modulo).upper()}-{str(accion).upper()}"
+    registrar_campos(
+        tipo_operacion=tipo,
+        id_registro=id_registro,
+        usuario=usuario,
+        cambios=[{"campo": "DETALLE", "valor_anterior": "", "valor_nuevo": detalle}],
+    )
+
+
+def registrar_campos(tipo_operacion, id_registro, usuario="SISTEMA", cambios=None):
+    cambios = cambios or []
+    if not cambios:
+        cambios = [{"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "SIN CAMBIOS"}]
+
+    rows = cargar()
+    now_txt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for c in cambios:
+        rows.append({
+            "id": common.next_id(rows),
+            "fecha_hora": now_txt,
+            "usuario": usuario,
+            "tipo_operacion": str(tipo_operacion).upper(),
+            "id_registro": id_registro,
+            "campo": str(c.get("campo", "")),
+            "valor_anterior": str(c.get("valor_anterior", "")),
+            "valor_nuevo": str(c.get("valor_nuevo", "")),
+        })
+    guardar(rows)
+
+
+def cargar():
+    rows = common.load_json(common.BITACORA_PATH, "bitacora")
+    out = []
+    for r in rows:
+        if "tipo_operacion" in r:
+            out.append(r)
+            continue
+        tipo = f"{str(r.get('modulo', '')).upper()}-{str(r.get('accion', '')).upper()}".strip("-")
+        out.append({
+            "id": r.get("id"),
+            "fecha_hora": r.get("fecha_hora", ""),
+            "usuario": r.get("usuario", ""),
+            "tipo_operacion": tipo,
+            "id_registro": r.get("id_registro", ""),
+            "campo": "DETALLE",
+            "valor_anterior": "",
+            "valor_nuevo": r.get("detalle", ""),
+        })
+    return out
+
+
+def guardar(rows):
+    common.save_json(common.BITACORA_PATH, "bitacora", rows)
+
+
+def ultimos_200():
+    rows = sorted(cargar(), key=lambda x: x.get("id", 0), reverse=True)
+    return rows[:200]
+
+
+def filtrar(desde="", hasta="", usuario="", tipo_operacion="", id_registro=""):
+    rows = cargar()
+    out = []
+
+    desde = (desde or "").strip()
+    hasta = (hasta or "").strip()
+    usuario = (usuario or "").strip().upper()
+    tipo_operacion = (tipo_operacion or "").strip().upper()
+    id_registro = str(id_registro or "").strip()
+
+    for r in rows:
+        fecha_hora = str(r.get("fecha_hora", ""))
+        fecha = fecha_hora[:10] if len(fecha_hora) >= 10 else ""
+
+        if desde and fecha and fecha < desde:
+            continue
+        if hasta and fecha and fecha > hasta:
+            continue
+        if usuario and usuario not in str(r.get("usuario", "")).upper():
+            continue
+        if tipo_operacion and tipo_operacion not in str(r.get("tipo_operacion", "")).upper():
+            continue
+        if id_registro and id_registro != str(r.get("id_registro", "")):
+            continue
+        out.append(r)
+
+    out.sort(key=lambda x: x.get("id", 0), reverse=True)
+    return out
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\check_logica.py ====================
+
+import json
+from datetime import datetime
+
+from app_paths import resource_path
+from logica.movimientos_common import next_id
+
+_CECIF_PATH = resource_path("data", "checkCECIF.json")
+_CLIENTES_PATH = resource_path("data", "checkClientes.json")
+
+_KEY_CECIF = "checkCECIF"
+_KEY_CLIENTES = "checkClientes"
+
+
+# ---------------------------------------------------------------------------
+# Low-level helpers
+# ---------------------------------------------------------------------------
+
+def _load(path, key):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get(key, [])
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _save(path, key, items):
+    records = [
+        "  " + json.dumps(item, ensure_ascii=False, separators=(", ", ": "))
+        for item in items
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        if records:
+            f.write('{ "' + key + '": [\n')
+            f.write(",\n".join(records))
+            f.write("\n] }\n")
+        else:
+            f.write('{ "' + key + '": [] }\n')
+
+
+# ---------------------------------------------------------------------------
+# CECIF checklist
+# ---------------------------------------------------------------------------
+
+VERIFICACION_CECIF_CAMPOS = [
+    ("nombre", "Nombre"),
+    ("no_lote", "No. de Lote"),
+    ("cantidad", "Cantidad"),
+    ("rotulo_identificacion", "RÃ³tulo de IdentificaciÃ³n"),
+    ("fecha_fabricacion", "Fecha de FabricaciÃ³n"),
+    ("fecha_vencimiento", "Fecha de Vencimiento"),
+    ("fabricante", "Fabricante"),
+    ("rotulos_seguridad", "RÃ³tulos de seguridad, sellos y precintos"),
+    ("ficha_seguridad", "Ficha de Seguridad"),
+    ("certificado_calidad", "Certificado de Calidad"),
+    ("golpes_roturas", "Se evidencian Golpes, Roturas u Otros"),
+    ("cumple_especificaciones", "Cumple con las especificaciones requeridas"),
+]
+
+
+def cargar_cecif():
+    return _load(_CECIF_PATH, _KEY_CECIF)
+
+
+def guardar_cecif_nuevo(items, datos):
+    """Append a new CECIF checklist record and persist. Returns the new record."""
+    nuevo = {
+        "id": next_id(items),
+        "fecha_creacion": datetime.now().isoformat(timespec="seconds"),
+        "fecha_recepcion": datos.get("fecha_recepcion", ""),
+        "id_proveedor": datos.get("id_proveedor"),
+        "no_orden_compra": datos.get("no_orden_compra", ""),
+        "id_sustancia": datos.get("id_sustancia"),
+        "lote": datos.get("lote", ""),
+        "cantidad": datos.get("cantidad", ""),
+        "observacion_producto": datos.get("observacion_producto", ""),
+        "verificacion": datos.get("verificacion", {}),
+        "observaciones": datos.get("observaciones", ""),
+        "id_usuario_aprobo": datos.get("id_usuario_aprobo"),
+        "id_usuario_verifico": datos.get("id_usuario_verifico"),
+    }
+    items.append(nuevo)
+    _save(_CECIF_PATH, _KEY_CECIF, items)
+    return nuevo
+
+
+# ---------------------------------------------------------------------------
+# Cliente checklist
+# ---------------------------------------------------------------------------
+
+VERIFICACION_NUEVAS_CAMPOS = [
+    ("nombre", "Nombre"),
+    ("no_lote", "No. de Lote"),
+    ("cantidad", "Cantidad"),
+    ("rotulo_identificacion", "RÃ³tulo de IdentificaciÃ³n"),
+    ("fecha_fabricacion", "Fecha de FabricaciÃ³n"),
+    ("fecha_vencimiento", "Fecha de Vencimiento"),
+    ("fabricante", "Fabricante"),
+    ("rotulos_seguridad", "RÃ³tulos de seguridad"),
+    ("ficha_seguridad", "Ficha de Seguridad"),
+    ("certificado_calidad", "Certificado de Calidad"),
+    ("golpes_roturas", "Se evidencian Golpes, Roturas u Otros"),
+    ("cumple_especificaciones", "Cumple con las especificaciones requeridas"),
+]
+
+VERIFICACION_DESTAPADAS_CAMPOS = [
+    ("nombre", "Nombre"),
+    ("no_lote", "No. de Lote"),
+    ("rotulo_identificacion", "RÃ³tulo de IdentificaciÃ³n"),
+    ("fecha_vencimiento", "Fecha de Vencimiento"),
+    ("certificado_calidad", "Certificado de Calidad"),
+    ("ficha_seguridad", "Ficha de Seguridad"),
+    ("golpes_roturas", "Se evidencian Golpes, Roturas u Otros"),
+    ("condiciones_almacenamiento", "Â¿Cumple condiciones de Almacenamiento?"),
+    ("carta_correo", "Carta o correo de envÃ­o por parte del cliente"),
+]
+
+
+def cargar_clientes():
+    return _load(_CLIENTES_PATH, _KEY_CLIENTES)
+
+
+def guardar_cliente_nuevo(items, datos):
+    """Append a new Cliente checklist record and persist. Returns the new record."""
+    nuevo = {
+        "id": next_id(items),
+        "fecha_creacion": datetime.now().isoformat(timespec="seconds"),
+        "fecha_recepcion": datos.get("fecha_recepcion", ""),
+        "nombre_cliente": datos.get("nombre_cliente", ""),
+        "id_sustancia": datos.get("id_sustancia"),
+        "cantidad": datos.get("cantidad", ""),
+        "observacion_producto": datos.get("observacion_producto", ""),
+        "verificacion_nuevas": datos.get("verificacion_nuevas", {}),
+        "verificacion_destapadas": datos.get("verificacion_destapadas", {}),
+        "observaciones": datos.get("observaciones", ""),
+        "id_usuario_reviso": datos.get("id_usuario_reviso"),
+        "id_usuario_verifico": datos.get("id_usuario_verifico"),
+    }
+    items.append(nuevo)
+    _save(_CLIENTES_PATH, _KEY_CLIENTES, items)
+    return nuevo
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\colores_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "color_refuerzo.json")
+_KEY = "color_refuerzo"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\condiciones_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "condicion_alm.json")
+_KEY = "condicion_alm"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\entradas_mov_logica.py ====================
+
+from logica import movimientos_common as common
+from logica import bitacora_logica as bit
+from logica import inventario_mov_logica as inv
+
+
+def _normalize_text(value):
+    txt = str(value or "").replace("\n", " ").strip()
+    while "  " in txt:
+        txt = txt.replace("  ", " ")
+    return txt.upper()
+
+
+def _normalize_record_fields(record):
+    out = dict(record)
+    for key in ["lote", "catalogo", "potencia", "factura", "observaciones"]:
+        if key in out:
+            out[key] = _normalize_text(out.get(key))
+    return out
+
+
+def cargar():
+    return common.cargar_entradas()
+
+
+def agregar(record, usuario="SISTEMA"):
+    rows = cargar()
+    nuevo = {"id": common.next_id(rows), "estado": "ACTIVA", **_normalize_record_fields(record)}
+    rows.append(nuevo)
+    common.guardar_entradas(rows)
+    inv.guardar_snapshot()
+    bit.registrar_campos(
+        tipo_operacion="ENTRADAS-CREAR",
+        id_registro=nuevo.get("id"),
+        usuario=usuario,
+        cambios=[{"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"}],
+    )
+    return nuevo
+
+
+def actualizar(id_entrada, cambios, usuario="SISTEMA"):
+    cambios = _normalize_record_fields(cambios)
+    rows = cargar()
+    old = None
+    updated = None
+    for r in rows:
+        if r.get("id") == id_entrada:
+            old = dict(r)
+            r.update(cambios)
+            updated = dict(r)
+            break
+    common.guardar_entradas(rows)
+    inv.guardar_snapshot()
+    cambios_log = []
+    if old is not None and updated is not None:
+        keys = sorted(set(old.keys()) | set(updated.keys()))
+        for k in keys:
+            old_v = old.get(k)
+            new_v = updated.get(k)
+            if str(old_v) != str(new_v):
+                cambios_log.append({"campo": k, "valor_anterior": old_v, "valor_nuevo": new_v})
+    bit.registrar_campos("ENTRADAS-EDITAR", id_entrada, usuario=usuario, cambios=cambios_log)
+
+
+def anular(id_entrada, usuario="SISTEMA"):
+    entradas = cargar()
+    salidas = common.cargar_salidas()
+
+    for e in entradas:
+        if e.get("id") == id_entrada:
+            e["estado"] = "ANULADA"
+            break
+
+    # Si se anula la entrada, se anulan salidas asociadas para consistencia kardex.
+    for s in salidas:
+        if s.get("id_entrada") == id_entrada:
+            s["estado"] = "ANULADA"
+
+    common.guardar_entradas(entradas)
+    common.guardar_salidas(salidas)
+    inv.guardar_snapshot()
+    bit.registrar_campos(
+        "ENTRADAS-ANULAR",
+        id_entrada,
+        usuario=usuario,
+        cambios=[
+            {"campo": "estado", "valor_anterior": "ACTIVA", "valor_nuevo": "ANULADA"},
+            {"campo": "salidas_asociadas", "valor_anterior": "ACTIVAS", "valor_nuevo": "ANULADAS"},
+        ],
+    )
+
+
+def ultimas_15(maestras):
+    rows = sorted(cargar(), key=lambda x: x.get("id", 0), reverse=True)[:15]
+    return enriquecer(rows, maestras)
+
+
+def filtrar(fecha="", fecha_desde="", fecha_hasta="", codigo="", lote="", maestras=None):
+    maestras = maestras or common.cargar_maestras()
+    rows = cargar()
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+
+    out = []
+    codigo = str(codigo).strip()
+    lote = str(lote).strip().upper()
+    fecha = str(fecha).strip()
+    fecha_desde = str(fecha_desde).strip()
+    fecha_hasta = str(fecha_hasta).strip()
+
+    for e in rows:
+        sust = sust_by_id.get(e.get("id_sustancia"), {})
+        c = str(sust.get("codigo", ""))
+        fecha_row = str(e.get("fecha_entrada", ""))
+        if fecha and fecha_row != fecha:
+            continue
+        if fecha_desde and fecha_row and fecha_row < fecha_desde:
+            continue
+        if fecha_hasta and fecha_row and fecha_row > fecha_hasta:
+            continue
+        if codigo and not c.startswith(codigo):
+            continue
+        if lote and lote not in str(e.get("lote", "")).upper():
+            continue
+        out.append(e)
+
+    out.sort(key=lambda x: x.get("id", 0), reverse=True)
+    return enriquecer(out, maestras)
+
+
+def enriquecer(rows, maestras):
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+    uni_by_id = common.map_by_id(maestras["unidades"])
+
+    out = []
+    for e in rows:
+        s = sust_by_id.get(e.get("id_sustancia"), {})
+        u = uni_by_id.get(e.get("id_unidad"), {})
+        out.append({
+            **e,
+            "codigo": s.get("codigo", ""),
+            "nombre": s.get("nombre", ""),
+            "unidad_nombre": u.get("unidad", ""),
+        })
+    return out
+
+
+def total_salidas_activas(id_entrada):
+    salidas = common.cargar_salidas()
+    total = 0.0
+    for s in salidas:
+        if s.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        if s.get("id_entrada") == id_entrada:
+            total += common.to_float(s.get("cantidad"))
+    return total
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\fabricantes_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "fabricante.json")
+_KEY = "fabricantes"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\inventario_mov_logica.py ====================
+
+from datetime import date, datetime
+
+from logica import movimientos_common as common
+
+
+def sugerir_unidad_id(id_sustancia):
+    entradas = common.cargar_entradas()
+    for e in sorted(entradas, key=lambda x: x.get("id", 0), reverse=True):
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        if e.get("id_sustancia") == id_sustancia and e.get("id_unidad"):
+            return e.get("id_unidad")
+    return None
+
+
+def construir_inventario():
+    maestras = common.cargar_maestras()
+    entradas = common.cargar_entradas()
+    salidas = common.cargar_salidas()
+
+    sustancias_by_id = common.map_by_id(maestras["sustancias"])
+    unidades_by_id = common.map_by_id(maestras["unidades"])
+    ubicaciones_by_id = common.map_by_id(maestras["ubicaciones"])
+    colores_by_id = common.map_by_id(maestras["colores"])
+    condiciones_by_id = common.map_by_id(maestras["condiciones"])
+
+    stock = common.stock_por_entrada(entradas, salidas)
+
+    rows = []
+    for e in entradas:
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+
+        s = sustancias_by_id.get(e.get("id_sustancia"), {})
+        u = unidades_by_id.get(e.get("id_unidad"), {})
+        ub = ubicaciones_by_id.get(e.get("id_ubicacion"), {})
+        c = colores_by_id.get(e.get("id_color_refuerzo"), {})
+        ca = condiciones_by_id.get(e.get("id_condicion_alm"), {})
+
+        fecha_v = str(e.get("fecha_vencimiento", "")).strip()
+        alarma_fv = ""
+        if fecha_v:
+            try:
+                fv = datetime.strptime(fecha_v, "%Y-%m-%d").date()
+                if fv < date.today():
+                    alarma_fv = "VENCIDO"
+                elif (fv - date.today()).days <= 30:
+                    alarma_fv = "PROXIMO A VENCER"
+                else:
+                    alarma_fv = "OK"
+            except ValueError:
+                alarma_fv = ""
+
+        rows.append({
+            "id_entrada": e.get("id"),
+            "codigo": s.get("codigo", ""),
+            "propiedad": s.get("propiedad", ""),
+            "tipo_muestras": s.get("tipo_muestras", ""),
+            "uso_previsto": s.get("uso_previsto", ""),
+            "no_caja": ub.get("no_caja", ""),
+            "ubicacion": ub.get("ubicacion", ""),
+            "condicion_alm": ca.get("condicion", ""),
+            "nombre": s.get("nombre", ""),
+            "potencia": e.get("potencia", ""),
+            "lote": e.get("lote", ""),
+            "catalogo": e.get("catalogo", ""),
+            "fecha_ingreso": e.get("fecha_entrada", ""),
+            "fecha_vencimiento": e.get("fecha_vencimiento", ""),
+            "alarma_fv": alarma_fv,
+            "unidad": u.get("unidad", ""),
+            "presentacion": e.get("presentacion", ""),
+            "cantidad_minima": s.get("cantidad_minima", ""),
+            "color_refuerzo": c.get("color_refuerzo", ""),
+            "certificado_anl": "SI" if e.get("certificado_anl") else "NO",
+            "ficha_seguridad": "SI" if e.get("ficha_seguridad") else "NO",
+            "factura_compra": "SI" if e.get("factura_compra") else "NO",
+            "codigo_sistema": s.get("codigo_sistema", ""),
+            "stock": round(stock.get(e.get("id"), 0.0), 4),
+        })
+
+        cant_min = common.to_float(s.get("cantidad_minima"))
+        current_stock = common.to_float(rows[-1].get("stock"))
+        if cant_min > 0 and current_stock < cant_min:
+            rows[-1]["alarma_stock"] = "BAJO MINIMO"
+        else:
+            rows[-1]["alarma_stock"] = "OK"
+
+    rows.sort(key=lambda r: (str(r.get("codigo", "")), str(r.get("lote", ""))))
+    return rows
+
+
+def guardar_snapshot():
+    rows = construir_inventario()
+    common.save_json(common.INVENTARIO_PATH, "inventario", rows)
+    return rows
+
+
+def cargar_snapshot():
+    rows = common.load_json(common.INVENTARIO_PATH, "inventario")
+    if not rows:
+        rows = guardar_snapshot()
+    return rows
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\movimientos_common.py ====================
+
+import json
+from collections import defaultdict
+
+from app_paths import resource_path
+
+ENTRADAS_PATH = resource_path("data", "entradas.json")
+SALIDAS_PATH = resource_path("data", "salidas.json")
+SUSTANCIAS_PATH = resource_path("data", "sustancias.json")
+UNIDADES_PATH = resource_path("data", "unidad.json")
+UBICACIONES_PATH = resource_path("data", "maestrasUbicaciones.json")
+COLORES_PATH = resource_path("data", "color_refuerzo.json")
+CONDICIONES_PATH = resource_path("data", "condicion_alm.json")
+FABRICANTES_PATH = resource_path("data", "fabricante.json")
+BITACORA_PATH = resource_path("data", "bitacora.json")
+TIPOS_ENTRADA_PATH = resource_path("data", "tipo_entrada.json")
+TIPOS_SALIDA_PATH = resource_path("data", "tipo_salida.json")
+INVENTARIO_PATH = resource_path("data", "inventario.json")
+
+
+def load_json(path, key):
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get(key, [])
+
+
+def save_json(path, key, items):
+    compact_files = {
+        ENTRADAS_PATH,
+        SALIDAS_PATH,
+        BITACORA_PATH,
+        INVENTARIO_PATH,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        if path in compact_files:
+            records = [
+                "  " + json.dumps(item, ensure_ascii=False, separators=(", ", ": "))
+                for item in items
+            ]
+            if records:
+                f.write("{ \"" + key + "\": [\n")
+                f.write(",\n".join(records))
+                f.write("\n] }\n")
+            else:
+                f.write("{ \"" + key + "\": [] }\n")
+        else:
+            json.dump({key: items}, f, ensure_ascii=False, indent=2)
+
+
+def next_id(items):
+    return max((i.get("id", 0) for i in items), default=0) + 1
+
+
+def to_float(value):
+    try:
+        txt = str(value).replace(",", ".").strip()
+        return float(txt) if txt else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def map_by_id(rows):
+    return {r["id"]: r for r in rows if "id" in r}
+
+
+def map_sustancia_by_codigo(sustancias):
+    out = {}
+    for s in sustancias:
+        codigo = str(s.get("codigo", "")).strip()
+        if codigo:
+            out[codigo] = s
+    return out
+
+
+def cargar_maestras():
+    sustancias = load_json(SUSTANCIAS_PATH, "maestrasSustancias")
+    unidades = load_json(UNIDADES_PATH, "unidad")
+    ubicaciones = load_json(UBICACIONES_PATH, "maestrasUbicaciones")
+    colores = load_json(COLORES_PATH, "color_refuerzo")
+    condiciones = load_json(CONDICIONES_PATH, "condicion_alm")
+    fabricantes = load_json(FABRICANTES_PATH, "fabricantes")
+    tipos_entrada = load_json(TIPOS_ENTRADA_PATH, "tipos_entrada")
+    tipos_salida = load_json(TIPOS_SALIDA_PATH, "tipos_salida")
+
+    def activos(rows):
+        return [r for r in rows if r.get("estado", "HABILITADA") == "HABILITADA"]
+
+    return {
+        "sustancias": activos(sustancias),
+        "unidades": activos(unidades),
+        "ubicaciones": activos(ubicaciones),
+        "colores": activos(colores),
+        "condiciones": activos(condiciones),
+        "fabricantes": activos(fabricantes),
+        "tipos_entrada": activos(tipos_entrada),
+        "tipos_salida": activos(tipos_salida),
+    }
+
+
+def cargar_entradas():
+    rows = load_json(ENTRADAS_PATH, "entradas")
+    for r in rows:
+        r.setdefault("estado", "ACTIVA")
+    return rows
+
+
+def guardar_entradas(rows):
+    save_json(ENTRADAS_PATH, "entradas", rows)
+
+
+def cargar_salidas():
+    rows = load_json(SALIDAS_PATH, "salidas")
+    for r in rows:
+        r.setdefault("estado", "ACTIVA")
+    return rows
+
+
+def guardar_salidas(rows):
+    save_json(SALIDAS_PATH, "salidas", rows)
+
+
+def stock_por_entrada(entradas, salidas):
+    salidas_acum = defaultdict(float)
+    for s in salidas:
+        if s.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        entrada_id = s.get("id_entrada")
+        salidas_acum[entrada_id] += to_float(s.get("cantidad"))
+
+    stock = {}
+    for e in entradas:
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        ingreso = to_float(e.get("cantidad"))
+        egreso = salidas_acum[e.get("id", -1)]
+        stock[e.get("id", -1)] = max(0.0, ingreso - egreso)
+    return stock
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\movimientos_logica.py ====================
+
+import json
+from collections import defaultdict
+from datetime import date, datetime
+
+from app_paths import resource_path
+
+_ENTRADAS_PATH = resource_path("data", "entradas.json")
+_SALIDAS_PATH = resource_path("data", "salidas.json")
+_SUSTANCIAS_PATH = resource_path("data", "sustancias.json")
+_UNIDADES_PATH = resource_path("data", "unidad.json")
+_UBICACIONES_PATH = resource_path("data", "maestrasUbicaciones.json")
+_COLORES_PATH = resource_path("data", "color_refuerzo.json")
+_CONDICIONES_PATH = resource_path("data", "condicion_alm.json")
+_FABRICANTES_PATH = resource_path("data", "fabricante.json")
+
+
+def _load(path, key):
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get(key, [])
+
+
+def _save(path, key, items):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({key: items}, f, ensure_ascii=False, indent=2)
+
+
+def _next_id(items):
+    return max((i.get("id", 0) for i in items), default=0) + 1
+
+
+def _to_float(value):
+    try:
+        txt = str(value).replace(",", ".").strip()
+        return float(txt) if txt else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def cargar_entradas():
+    return _load(_ENTRADAS_PATH, "entradas")
+
+
+def cargar_salidas():
+    return _load(_SALIDAS_PATH, "salidas")
+
+
+def guardar_entradas(items):
+    _save(_ENTRADAS_PATH, "entradas", items)
+
+
+def guardar_salidas(items):
+    _save(_SALIDAS_PATH, "salidas", items)
+
+
+def cargar_maestras():
+    sustancias = _load(_SUSTANCIAS_PATH, "maestrasSustancias")
+    unidades = _load(_UNIDADES_PATH, "unidad")
+    ubicaciones = _load(_UBICACIONES_PATH, "maestrasUbicaciones")
+    colores = _load(_COLORES_PATH, "color_refuerzo")
+    condiciones = _load(_CONDICIONES_PATH, "condicion_alm")
+    fabricantes = _load(_FABRICANTES_PATH, "fabricantes")
+
+    # Solo opciones activas (si el campo existe)
+    def _activos(rows):
+        return [r for r in rows if r.get("estado", "HABILITADA") == "HABILITADA"]
+
+    return {
+        "sustancias": _activos(sustancias),
+        "unidades": _activos(unidades),
+        "ubicaciones": _activos(ubicaciones),
+        "colores": _activos(colores),
+        "condiciones": condiciones,
+        "fabricantes": _activos(fabricantes),
+    }
+
+
+def agregar_entrada(record):
+    entradas = cargar_entradas()
+    nuevo = {"id": _next_id(entradas), **record}
+    entradas.append(nuevo)
+    guardar_entradas(entradas)
+    return nuevo
+
+
+def agregar_salida(record):
+    salidas = cargar_salidas()
+    nuevo = {"id": _next_id(salidas), **record}
+    salidas.append(nuevo)
+    guardar_salidas(salidas)
+    return nuevo
+
+
+def map_by_id(rows):
+    return {r["id"]: r for r in rows if "id" in r}
+
+
+def map_sustancia_by_codigo(sustancias):
+    out = {}
+    for s in sustancias:
+        codigo = str(s.get("codigo", "")).strip()
+        if codigo:
+            out[codigo] = s
+    return out
+
+
+def stock_por_entrada(entradas, salidas):
+    salidas_acum = defaultdict(float)
+    for s in salidas:
+        entrada_id = s.get("id_entrada")
+        salidas_acum[entrada_id] += _to_float(s.get("cantidad"))
+
+    stock = {}
+    for e in entradas:
+        ingreso = _to_float(e.get("cantidad"))
+        egreso = salidas_acum[e.get("id", -1)]
+        stock[e.get("id", -1)] = max(0.0, ingreso - egreso)
+    return stock
+
+
+def lotes_disponibles_por_sustancia(id_sustancia):
+    entradas = cargar_entradas()
+    salidas = cargar_salidas()
+    stock = stock_por_entrada(entradas, salidas)
+
+    disponibles = []
+    for e in entradas:
+        if e.get("id_sustancia") != id_sustancia:
+            continue
+        disponible = stock.get(e.get("id"), 0.0)
+        if disponible <= 0:
+            continue
+        disponibles.append({
+            "id_entrada": e.get("id"),
+            "lote": e.get("lote", ""),
+            "catalogo": e.get("catalogo", ""),
+            "disponible": round(disponible, 4),
+            "id_unidad": e.get("id_unidad"),
+        })
+    return disponibles
+
+
+def sugerir_unidad_id(id_sustancia):
+    entradas = cargar_entradas()
+    for e in sorted(entradas, key=lambda x: x.get("id", 0), reverse=True):
+        if e.get("id_sustancia") == id_sustancia and e.get("id_unidad"):
+            return e.get("id_unidad")
+    return None
+
+
+def construir_inventario():
+    maestras = cargar_maestras()
+    entradas = cargar_entradas()
+    salidas = cargar_salidas()
+
+    sustancias_by_id = map_by_id(maestras["sustancias"])
+    unidades_by_id = map_by_id(maestras["unidades"])
+    ubicaciones_by_id = map_by_id(maestras["ubicaciones"])
+    colores_by_id = map_by_id(maestras["colores"])
+    condiciones_by_id = map_by_id(maestras["condiciones"])
+
+    stock = stock_por_entrada(entradas, salidas)
+
+    rows = []
+    for e in entradas:
+        s = sustancias_by_id.get(e.get("id_sustancia"), {})
+        u = unidades_by_id.get(e.get("id_unidad"), {})
+        ub = ubicaciones_by_id.get(e.get("id_ubicacion"), {})
+        c = colores_by_id.get(e.get("id_color_refuerzo"), {})
+        ca = condiciones_by_id.get(e.get("id_condicion_alm"), {})
+
+        fecha_v = str(e.get("fecha_vencimiento", "")).strip()
+        alarma_fv = ""
+        if fecha_v:
+            try:
+                fv = datetime.strptime(fecha_v, "%Y-%m-%d").date()
+                if fv < date.today():
+                    alarma_fv = "VENCIDO"
+                elif (fv - date.today()).days <= 30:
+                    alarma_fv = "PROXIMO A VENCER"
+                else:
+                    alarma_fv = "OK"
+            except ValueError:
+                alarma_fv = ""
+
+        rows.append({
+            "id_entrada": e.get("id"),
+            "codigo": s.get("codigo", ""),
+            "propiedad": s.get("propiedad", ""),
+            "tipo_muestras": s.get("tipo_muestras", ""),
+            "uso_previsto": s.get("uso_previsto", ""),
+            "no_caja": ub.get("no_caja", ""),
+            "ubicacion": ub.get("ubicacion", ""),
+            "condicion_alm": ca.get("condicion", ""),
+            "nombre": s.get("nombre", ""),
+            "potencia": e.get("potencia", ""),
+            "lote": e.get("lote", ""),
+            "catalogo": e.get("catalogo", ""),
+            "fecha_ingreso": e.get("fecha_entrada", ""),
+            "fecha_vencimiento": e.get("fecha_vencimiento", ""),
+            "alarma_fv": alarma_fv,
+            "unidad": u.get("unidad", ""),
+            "presentacion": e.get("presentacion", ""),
+            "cantidad_minima": s.get("cantidad_minima", ""),
+            "color_refuerzo": c.get("color_refuerzo", ""),
+            "certificado_anl": "SI" if e.get("certificado_anl") else "NO",
+            "ficha_seguridad": "SI" if e.get("ficha_seguridad") else "NO",
+            "factura_compra": "SI" if e.get("factura_compra") else "NO",
+            "codigo_sistema": s.get("codigo_sistema", ""),
+            "stock": round(stock.get(e.get("id"), 0.0), 4),
+        })
+
+    rows.sort(key=lambda r: (str(r.get("codigo", "")), str(r.get("lote", ""))))
+    return rows
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\prestamos_logica.py ====================
+
+from datetime import datetime
+import json
+
+from app_paths import resource_path
+from logica import bitacora_logica as bit
+from logica import movimientos_common as common
+from logica import salidas_mov_logica as sal
+from logica import usuarios_logica as usr
+
+PRESTAMOS_PATH = resource_path("data", "prestamos.json")
+RECIBOS_PATH = resource_path("data", "recibos.json")
+
+
+def _normalize_obs(value):
+    txt = str(value or "").replace("\n", " ").strip()
+    while "  " in txt:
+        txt = txt.replace("  ", " ")
+    return txt.upper()
+
+
+def _load_json_safe(path, key):
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return []
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    return data.get(key, []) if isinstance(data, dict) else []
+
+
+def _save_compact(path, key, items):
+    records = [
+        "  " + json.dumps(item, ensure_ascii=False, separators=(", ", ": "))
+        for item in items
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        if records:
+            f.write('{ "' + key + '\": [\n')
+            f.write(",\n".join(records))
+            f.write("\n] }\n")
+        else:
+            f.write('{ "' + key + '\": [] }\n')
+
+
+def cargar_prestamos():
+    rows = _load_json_safe(PRESTAMOS_PATH, "prestamos")
+    for r in rows:
+        r.setdefault("estado", "PENDIENTE")
+    return rows
+
+
+def guardar_prestamos(rows):
+    _save_compact(PRESTAMOS_PATH, "prestamos", rows)
+
+
+def cargar_recibos():
+    return _load_json_safe(RECIBOS_PATH, "recibos")
+
+
+def guardar_recibos(rows):
+    _save_compact(RECIBOS_PATH, "recibos", rows)
+
+
+def usuarios_habilitados():
+    return [u for u in usr.cargar() if u.get("estado", "HABILITADA") == "HABILITADA"]
+
+
+def codigos_con_stock(maestras):
+    return sal.codigos_con_stock_disponible(maestras)
+
+
+def lotes_disponibles(id_sustancia):
+    return sal.lotes_disponibles_por_sustancia(id_sustancia)
+
+
+def _tipo_salida_prestamo_id(maestras):
+    for r in maestras.get("tipos_salida", []):
+        nombre = str(r.get("tipo_salida", "")).strip().upper()
+        if nombre in {"PRESTAMO", "PRÃ‰STAMO"}:
+            return r.get("id")
+    return None
+
+
+def crear_prestamo(datos, usuario_presta="SISTEMA"):
+    rows = cargar_prestamos()
+    now_txt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    nuevo = {
+        "id": common.next_id(rows),
+        "fecha_creacion": now_txt,
+        "fecha_prestamo": datos.get("fecha_prestamo", datetime.now().strftime("%Y-%m-%d")),
+        "id_sustancia": datos.get("id_sustancia"),
+        "id_entrada": datos.get("id_entrada"),
+        "id_unidad": datos.get("id_unidad"),
+        "cantidad": float(datos.get("cantidad", 0)),
+        "id_usuario_presta": datos.get("id_usuario_presta"),
+        "id_usuario_destino": datos.get("id_usuario_destino"),
+        "firma_presta_path": datos.get("firma_presta_path", ""),
+        "observacion": _normalize_obs(datos.get("observacion", "")),
+        "estado": "PENDIENTE",
+    }
+    rows.append(nuevo)
+    guardar_prestamos(rows)
+
+    bit.registrar_campos(
+        tipo_operacion="PRESTAMO-CREAR",
+        id_registro=nuevo.get("id"),
+        usuario=usuario_presta,
+        cambios=[{"campo": "estado", "valor_anterior": "", "valor_nuevo": "PENDIENTE"}],
+    )
+    return nuevo
+
+
+def _enriquecer_prestamo(prestamo, maestras, usuarios_by_id):
+    sust_by_id = common.map_by_id(maestras.get("sustancias", []))
+    uni_by_id = common.map_by_id(maestras.get("unidades", []))
+    sust = sust_by_id.get(prestamo.get("id_sustancia"), {})
+    uni = uni_by_id.get(prestamo.get("id_unidad"), {})
+    presta = usuarios_by_id.get(prestamo.get("id_usuario_presta"), {})
+    destino = usuarios_by_id.get(prestamo.get("id_usuario_destino"), {})
+    return {
+        **prestamo,
+        "codigo": sust.get("codigo", ""),
+        "nombre": sust.get("nombre", ""),
+        "lote": _lote_por_entrada(prestamo.get("id_entrada")),
+        "unidad": uni.get("unidad", ""),
+        "usuario_presta_nombre": presta.get("nombre") or presta.get("usuario", ""),
+        "usuario_destino_nombre": destino.get("nombre") or destino.get("usuario", ""),
+    }
+
+
+def _lote_por_entrada(id_entrada):
+    for e in common.cargar_entradas():
+        if e.get("id") == id_entrada:
+            return e.get("lote", "")
+    return ""
+
+
+def meses_prestamos_emitidos(id_usuario):
+    rows = [r for r in cargar_prestamos() if r.get("id_usuario_presta") == id_usuario]
+    meses = set()
+    for r in rows:
+        fecha = str(r.get("fecha_prestamo", "")).strip()
+        if len(fecha) >= 7 and fecha[4] == "-":
+            meses.add(fecha[:7])
+    return sorted(meses, reverse=True)
+
+
+def prestamos_emitidos_por_usuario(id_usuario, maestras, mes="", limit=15):
+    usuarios = usuarios_habilitados()
+    usuarios_by_id = common.map_by_id(usuarios)
+    rows = [r for r in cargar_prestamos() if r.get("id_usuario_presta") == id_usuario]
+
+    mes = str(mes or "").strip()
+    if mes:
+        rows = [r for r in rows if str(r.get("fecha_prestamo", "")).startswith(mes)]
+
+    rows.sort(key=lambda x: x.get("id", 0), reverse=True)
+    if limit is not None and limit > 0:
+        rows = rows[:limit]
+    return [_enriquecer_prestamo(r, maestras, usuarios_by_id) for r in rows]
+
+
+def prestamos_pendientes_para_usuario(id_usuario, maestras):
+    usuarios = usuarios_habilitados()
+    usuarios_by_id = common.map_by_id(usuarios)
+    rows = [
+        r for r in cargar_prestamos()
+        if r.get("id_usuario_destino") == id_usuario and r.get("estado", "PENDIENTE") == "PENDIENTE"
+    ]
+    rows.sort(key=lambda x: x.get("id", 0), reverse=True)
+    return [_enriquecer_prestamo(r, maestras, usuarios_by_id) for r in rows]
+
+
+def responder_prestamo(id_prestamo, id_usuario_recibe, aceptar, observacion_recibo="", usuario_accion="SISTEMA"):
+    prestamos = cargar_prestamos()
+    idx = next((i for i, p in enumerate(prestamos) if p.get("id") == id_prestamo), None)
+    if idx is None:
+        return False, "No se encontrÃ³ el prÃ©stamo seleccionado."
+
+    prestamo = prestamos[idx]
+    if prestamo.get("estado", "PENDIENTE") != "PENDIENTE":
+        return False, "Este prÃ©stamo ya fue respondido."
+
+    if int(prestamo.get("id_usuario_destino") or 0) != int(id_usuario_recibe or 0):
+        return False, "El prÃ©stamo no corresponde al usuario autenticado."
+
+    if aceptar:
+        lotes = sal.lotes_disponibles_por_sustancia(prestamo.get("id_sustancia"))
+        lote = next((l for l in lotes if l.get("id_entrada") == prestamo.get("id_entrada")), None)
+        disponible = common.to_float(lote.get("disponible") if lote else 0)
+        cantidad = common.to_float(prestamo.get("cantidad"))
+        if cantidad <= 0:
+            return False, "Cantidad de prÃ©stamo invÃ¡lida."
+        if disponible < cantidad:
+            return False, f"Stock insuficiente para aceptar. Disponible actual: {disponible}"
+
+        maestras = common.cargar_maestras()
+        usuarios = usuarios_habilitados()
+        usuarios_by_id = common.map_by_id(usuarios)
+        presta = usuarios_by_id.get(prestamo.get("id_usuario_presta"), {})
+        tipo_salida_id = _tipo_salida_prestamo_id(maestras)
+
+        record_salida = {
+            "fecha_salida": datetime.now().strftime("%Y-%m-%d"),
+            "id_tipo_salida": tipo_salida_id,
+            "id_sustancia": prestamo.get("id_sustancia"),
+            "id_entrada": prestamo.get("id_entrada"),
+            "id_unidad": prestamo.get("id_unidad"),
+            "cantidad": cantidad,
+            "actividad": f"PRESTAMO A {(usuarios_by_id.get(id_usuario_recibe, {}).get('usuario') or '').upper()}",
+            "observacion": _normalize_obs(
+                f"PrÃ©stamo aprobado por receptor. Prestador: {presta.get('usuario', '')}. {observacion_recibo}"
+            ),
+        }
+        salida = sal.agregar(record_salida, usuario=usuario_accion)
+        id_salida = salida.get("id")
+        nuevo_estado = "ACEPTADO"
+    else:
+        id_salida = None
+        nuevo_estado = "RECHAZADO"
+
+    prestamo["estado"] = nuevo_estado
+    prestamo["fecha_respuesta"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prestamo["id_usuario_recibe"] = id_usuario_recibe
+    guardar_prestamos(prestamos)
+
+    recibos = cargar_recibos()
+    recibo = {
+        "id": common.next_id(recibos),
+        "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "id_prestamo": id_prestamo,
+        "id_sustancia": prestamo.get("id_sustancia"),
+        "id_usuario_presta": prestamo.get("id_usuario_presta"),
+        "id_usuario_recibe": id_usuario_recibe,
+        "cantidad": prestamo.get("cantidad"),
+        "recibio": bool(aceptar),
+        "estado": nuevo_estado,
+        "observacion": _normalize_obs(observacion_recibo),
+        "id_salida": id_salida,
+    }
+    recibos.append(recibo)
+    guardar_recibos(recibos)
+
+    bit.registrar_campos(
+        tipo_operacion="PRESTAMO-RESPUESTA",
+        id_registro=id_prestamo,
+        usuario=usuario_accion,
+        cambios=[{"campo": "estado", "valor_anterior": "PENDIENTE", "valor_nuevo": nuevo_estado}],
+    )
+
+    return True, "PrÃ©stamo procesado correctamente."
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\salidas_mov_logica.py ====================
+
+from logica import movimientos_common as common
+from logica import bitacora_logica as bit
+from logica import inventario_mov_logica as inv
+
+
+def _normalize_text(value):
+    txt = str(value or "").replace("\n", " ").strip()
+    while "  " in txt:
+        txt = txt.replace("  ", " ")
+    return txt.upper()
+
+
+def _normalize_record_fields(record):
+    out = dict(record)
+    for key in ["actividad", "observacion"]:
+        if key in out:
+            out[key] = _normalize_text(out.get(key))
+    return out
+
+
+def cargar():
+    return common.cargar_salidas()
+
+
+def agregar(record, usuario="SISTEMA"):
+    rows = cargar()
+    nuevo = {"id": common.next_id(rows), "estado": "ACTIVA", **_normalize_record_fields(record)}
+    rows.append(nuevo)
+    common.guardar_salidas(rows)
+    inv.guardar_snapshot()
+
+    cambios = [
+        {"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"},
+        {"campo": "cantidad", "valor_anterior": "0", "valor_nuevo": nuevo.get("cantidad", "")},
+    ]
+    if nuevo.get("id_entrada") is not None:
+        cambios.append({
+            "campo": "id_entrada",
+            "valor_anterior": "",
+            "valor_nuevo": nuevo.get("id_entrada", ""),
+        })
+
+    bit.registrar_campos(
+        tipo_operacion="SALIDAS-CREAR",
+        id_registro=nuevo.get("id"),
+        usuario=usuario,
+        cambios=cambios,
+    )
+    return nuevo
+
+
+def actualizar(id_salida, cambios, usuario="SISTEMA"):
+    cambios = _normalize_record_fields(cambios)
+    rows = cargar()
+    old = None
+    updated = None
+    for r in rows:
+        if r.get("id") == id_salida:
+            old = dict(r)
+            r.update(cambios)
+            updated = dict(r)
+            break
+    common.guardar_salidas(rows)
+    inv.guardar_snapshot()
+    cambios_log = []
+    if old is not None and updated is not None:
+        keys = sorted(set(old.keys()) | set(updated.keys()))
+        for k in keys:
+            old_v = old.get(k)
+            new_v = updated.get(k)
+            if str(old_v) != str(new_v):
+                cambios_log.append({"campo": k, "valor_anterior": old_v, "valor_nuevo": new_v})
+    bit.registrar_campos("SALIDAS-EDITAR", id_salida, usuario=usuario, cambios=cambios_log)
+
+
+def anular(id_salida, usuario="SISTEMA"):
+    rows = cargar()
+    for r in rows:
+        if r.get("id") == id_salida:
+            r["estado"] = "ANULADA"
+            break
+    common.guardar_salidas(rows)
+    inv.guardar_snapshot()
+    bit.registrar_campos(
+        "SALIDAS-ANULAR",
+        id_salida,
+        usuario=usuario,
+        cambios=[{"campo": "estado", "valor_anterior": "ACTIVA", "valor_nuevo": "ANULADA"}],
+    )
+
+
+def lotes_disponibles_por_sustancia(id_sustancia):
+    entradas = common.cargar_entradas()
+    salidas = common.cargar_salidas()
+    stock = common.stock_por_entrada(entradas, salidas)
+
+    disponibles = []
+    for e in entradas:
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        if e.get("id_sustancia") != id_sustancia:
+            continue
+        disponible = stock.get(e.get("id"), 0.0)
+        if disponible <= 0:
+            continue
+        disponibles.append({
+            "id_entrada": e.get("id"),
+            "lote": e.get("lote", ""),
+            "catalogo": e.get("catalogo", ""),
+            "disponible": round(disponible, 4),
+            "id_unidad": e.get("id_unidad"),
+        })
+    return disponibles
+
+
+def codigos_con_stock_disponible(maestras):
+    entradas = common.cargar_entradas()
+    salidas = common.cargar_salidas()
+    stock = common.stock_por_entrada(entradas, salidas)
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+
+    codigos = set()
+    for e in entradas:
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        if stock.get(e.get("id"), 0.0) <= 0:
+            continue
+        sust = sust_by_id.get(e.get("id_sustancia"), {})
+        codigo = str(sust.get("codigo", "")).strip()
+        if codigo:
+            codigos.add(codigo)
+    return sorted(codigos, key=lambda x: (len(x), x))
+
+
+def ultimas_15(maestras):
+    rows = sorted(cargar(), key=lambda x: x.get("id", 0), reverse=True)[:15]
+    return enriquecer(rows, maestras)
+
+
+def filtrar(fecha="", fecha_desde="", fecha_hasta="", codigo="", lote="", maestras=None):
+    maestras = maestras or common.cargar_maestras()
+    rows = cargar()
+    entradas = common.cargar_entradas()
+    ent_by_id = common.map_by_id(entradas)
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+
+    out = []
+    codigo = str(codigo).strip()
+    lote = str(lote).strip().upper()
+    fecha = str(fecha).strip()
+    fecha_desde = str(fecha_desde).strip()
+    fecha_hasta = str(fecha_hasta).strip()
+
+    for s in rows:
+        ent = ent_by_id.get(s.get("id_entrada"), {})
+        sust = sust_by_id.get(s.get("id_sustancia"), {})
+        c = str(sust.get("codigo", ""))
+        fecha_row = str(s.get("fecha_salida", ""))
+        if fecha and fecha_row != fecha:
+            continue
+        if fecha_desde and fecha_row and fecha_row < fecha_desde:
+            continue
+        if fecha_hasta and fecha_row and fecha_row > fecha_hasta:
+            continue
+        if codigo and not c.startswith(codigo):
+            continue
+        if lote and lote not in str(ent.get("lote", "")).upper():
+            continue
+        out.append(s)
+
+    out.sort(key=lambda x: x.get("id", 0), reverse=True)
+    return enriquecer(out, maestras)
+
+
+def enriquecer(rows, maestras):
+    entradas = common.cargar_entradas()
+    ent_by_id = common.map_by_id(entradas)
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+    uni_by_id = common.map_by_id(maestras["unidades"])
+
+    out = []
+    for s in rows:
+        e = ent_by_id.get(s.get("id_entrada"), {})
+        sust = sust_by_id.get(s.get("id_sustancia"), {})
+        uni = uni_by_id.get(s.get("id_unidad"), {})
+        if not uni:
+            uni = uni_by_id.get(e.get("id_unidad"), {})
+        out.append({
+            **s,
+            "codigo": sust.get("codigo", ""),
+            "nombre": sust.get("nombre", ""),
+            "lote": e.get("lote", ""),
+            "unidad_nombre": uni.get("unidad", ""),
+        })
+    return out
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\sustancias_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "sustancias.json")
+_KEY = "maestrasSustancias"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\tipos_entrada_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "tipo_entrada.json")
+_KEY = "tipos_entrada"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\tipos_salida_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "tipo_salida.json")
+_KEY = "tipos_salida"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\ubicaciones_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "maestrasUbicaciones.json")
+_KEY = "maestrasUbicaciones"
+
+SUFIJOS = {"FREEZER": "F", "NEVERA": "N", "CABINA": "C"}
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\unidades_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "unidad.json")
+_KEY = "unidad"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\usuarios_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "usuarios.json")
+_KEY = "usuarios"
+
+_DEFAULT_PERMISOS = {
+    "entradas": True,
+    "salidas": True,
+    "inventario": True,
+    "bitacora": True,
+    "prestamos": True,
+    "sustancias": True,
+    "tipos_entrada": True,
+    "tipos_salida": True,
+    "fabricantes": True,
+    "unidades": True,
+    "ubicaciones": True,
+    "condiciones": True,
+    "colores": True,
+    "usuarios": True,
+    "firma_path": "",
+    "firma_password": "",
+}
+
+
+def _normalizar(r: dict) -> dict:
+    src_permisos = r.get("permisos", {}) if isinstance(r.get("permisos", {}), dict) else {}
+    permisos = dict(_DEFAULT_PERMISOS)
+    permisos.update(src_permisos)
+
+    # Compatibilidad con estructura anterior de permisos.
+    if "stock" in src_permisos:
+        permisos["inventario"] = bool(src_permisos.get("stock"))
+    if "auditoria" in src_permisos:
+        permisos["bitacora"] = bool(src_permisos.get("auditoria"))
+
+    return {
+        "id": r.get("id"),
+        "usuario": r.get("usuario") or r.get("nombre", ""),
+        "contrasena": r.get("contrasena") or r.get("contraseÃ±a", ""),
+        "nombre": r.get("nombre", ""),
+        "rol": r.get("rol", ""),
+        "permisos": permisos,
+        "estado": r.get("estado", "HABILITADA"),
+    }
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = [_normalizar(r) for r in datos.get(_KEY, [])]
+    return registros
+
+
+def _guardar(registros: list):
+    records = [
+        "  " + json.dumps(r, ensure_ascii=False, separators=(", ", ": "))
+        for r in registros
+    ]
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        if records:
+            f.write("{ \"usuarios\": [\n")
+            f.write(",\n".join(records))
+            f.write("\n] }\n")
+        else:
+            f.write("{ \"usuarios\": [] }\n")
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = _normalizar({"id": max_id + 1, "estado": "HABILITADA", **datos})
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\__init__.py ====================
+
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\bitacora_logica.py ====================
+
+from datetime import datetime
+
+from logica import movimientos_common as common
+
+
+def registrar(modulo, accion, id_registro, detalle="", usuario="SISTEMA"):
+    tipo = f"{str(modulo).upper()}-{str(accion).upper()}"
+    registrar_campos(
+        tipo_operacion=tipo,
+        id_registro=id_registro,
+        usuario=usuario,
+        cambios=[{"campo": "DETALLE", "valor_anterior": "", "valor_nuevo": detalle}],
+    )
+
+
+def registrar_campos(tipo_operacion, id_registro, usuario="SISTEMA", cambios=None):
+    cambios = cambios or []
+    if not cambios:
+        cambios = [{"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "SIN CAMBIOS"}]
+
+    rows = cargar()
+    now_txt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for c in cambios:
+        rows.append({
+            "id": common.next_id(rows),
+            "fecha_hora": now_txt,
+            "usuario": usuario,
+            "tipo_operacion": str(tipo_operacion).upper(),
+            "id_registro": id_registro,
+            "campo": str(c.get("campo", "")),
+            "valor_anterior": str(c.get("valor_anterior", "")),
+            "valor_nuevo": str(c.get("valor_nuevo", "")),
+        })
+    guardar(rows)
+
+
+def cargar():
+    rows = common.load_json(common.BITACORA_PATH, "bitacora")
+    out = []
+    for r in rows:
+        if "tipo_operacion" in r:
+            out.append(r)
+            continue
+        tipo = f"{str(r.get('modulo', '')).upper()}-{str(r.get('accion', '')).upper()}".strip("-")
+        out.append({
+            "id": r.get("id"),
+            "fecha_hora": r.get("fecha_hora", ""),
+            "usuario": r.get("usuario", ""),
+            "tipo_operacion": tipo,
+            "id_registro": r.get("id_registro", ""),
+            "campo": "DETALLE",
+            "valor_anterior": "",
+            "valor_nuevo": r.get("detalle", ""),
+        })
+    return out
+
+
+def guardar(rows):
+    common.save_json(common.BITACORA_PATH, "bitacora", rows)
+
+
+def ultimos_200():
+    rows = sorted(cargar(), key=lambda x: x.get("id", 0), reverse=True)
+    return rows[:200]
+
+
+def filtrar(desde="", hasta="", usuario="", tipo_operacion="", id_registro=""):
+    rows = cargar()
+    out = []
+
+    desde = (desde or "").strip()
+    hasta = (hasta or "").strip()
+    usuario = (usuario or "").strip().upper()
+    tipo_operacion = (tipo_operacion or "").strip().upper()
+    id_registro = str(id_registro or "").strip()
+
+    for r in rows:
+        fecha_hora = str(r.get("fecha_hora", ""))
+        fecha = fecha_hora[:10] if len(fecha_hora) >= 10 else ""
+
+        if desde and fecha and fecha < desde:
+            continue
+        if hasta and fecha and fecha > hasta:
+            continue
+        if usuario and usuario not in str(r.get("usuario", "")).upper():
+            continue
+        if tipo_operacion and tipo_operacion not in str(r.get("tipo_operacion", "")).upper():
+            continue
+        if id_registro and id_registro != str(r.get("id_registro", "")):
+            continue
+        out.append(r)
+
+    out.sort(key=lambda x: x.get("id", 0), reverse=True)
+    return out
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\check_logica.py ====================
+
+import json
+from datetime import datetime
+
+from app_paths import resource_path
+from logica.movimientos_common import next_id
+
+_CECIF_PATH = resource_path("data", "checkCECIF.json")
+_CLIENTES_PATH = resource_path("data", "checkClientes.json")
+
+_KEY_CECIF = "checkCECIF"
+_KEY_CLIENTES = "checkClientes"
+
+
+# ---------------------------------------------------------------------------
+# Low-level helpers
+# ---------------------------------------------------------------------------
+
+def _load(path, key):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f).get(key, [])
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _save(path, key, items):
+    records = [
+        "  " + json.dumps(item, ensure_ascii=False, separators=(", ", ": "))
+        for item in items
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        if records:
+            f.write('{ "' + key + '": [\n')
+            f.write(",\n".join(records))
+            f.write("\n] }\n")
+        else:
+            f.write('{ "' + key + '": [] }\n')
+
+
+# ---------------------------------------------------------------------------
+# CECIF checklist
+# ---------------------------------------------------------------------------
+
+VERIFICACION_CECIF_CAMPOS = [
+    ("nombre", "Nombre"),
+    ("no_lote", "No. de Lote"),
+    ("cantidad", "Cantidad"),
+    ("rotulo_identificacion", "RÃ³tulo de IdentificaciÃ³n"),
+    ("fecha_fabricacion", "Fecha de FabricaciÃ³n"),
+    ("fecha_vencimiento", "Fecha de Vencimiento"),
+    ("fabricante", "Fabricante"),
+    ("rotulos_seguridad", "RÃ³tulos de seguridad, sellos y precintos"),
+    ("ficha_seguridad", "Ficha de Seguridad"),
+    ("certificado_calidad", "Certificado de Calidad"),
+    ("golpes_roturas", "Se evidencian Golpes, Roturas u Otros"),
+    ("cumple_especificaciones", "Cumple con las especificaciones requeridas"),
+]
+
+
+def cargar_cecif():
+    return _load(_CECIF_PATH, _KEY_CECIF)
+
+
+def guardar_cecif_nuevo(items, datos):
+    """Append a new CECIF checklist record and persist. Returns the new record."""
+    nuevo = {
+        "id": next_id(items),
+        "fecha_creacion": datetime.now().isoformat(timespec="seconds"),
+        "fecha_recepcion": datos.get("fecha_recepcion", ""),
+        "id_proveedor": datos.get("id_proveedor"),
+        "no_orden_compra": datos.get("no_orden_compra", ""),
+        "id_sustancia": datos.get("id_sustancia"),
+        "lote": datos.get("lote", ""),
+        "cantidad": datos.get("cantidad", ""),
+        "observacion_producto": datos.get("observacion_producto", ""),
+        "verificacion": datos.get("verificacion", {}),
+        "observaciones": datos.get("observaciones", ""),
+        "id_usuario_aprobo": datos.get("id_usuario_aprobo"),
+        "id_usuario_verifico": datos.get("id_usuario_verifico"),
+    }
+    items.append(nuevo)
+    _save(_CECIF_PATH, _KEY_CECIF, items)
+    return nuevo
+
+
+# ---------------------------------------------------------------------------
+# Cliente checklist
+# ---------------------------------------------------------------------------
+
+VERIFICACION_NUEVAS_CAMPOS = [
+    ("nombre", "Nombre"),
+    ("no_lote", "No. de Lote"),
+    ("cantidad", "Cantidad"),
+    ("rotulo_identificacion", "RÃ³tulo de IdentificaciÃ³n"),
+    ("fecha_fabricacion", "Fecha de FabricaciÃ³n"),
+    ("fecha_vencimiento", "Fecha de Vencimiento"),
+    ("fabricante", "Fabricante"),
+    ("rotulos_seguridad", "RÃ³tulos de seguridad"),
+    ("ficha_seguridad", "Ficha de Seguridad"),
+    ("certificado_calidad", "Certificado de Calidad"),
+    ("golpes_roturas", "Se evidencian Golpes, Roturas u Otros"),
+    ("cumple_especificaciones", "Cumple con las especificaciones requeridas"),
+]
+
+VERIFICACION_DESTAPADAS_CAMPOS = [
+    ("nombre", "Nombre"),
+    ("no_lote", "No. de Lote"),
+    ("rotulo_identificacion", "RÃ³tulo de IdentificaciÃ³n"),
+    ("fecha_vencimiento", "Fecha de Vencimiento"),
+    ("certificado_calidad", "Certificado de Calidad"),
+    ("ficha_seguridad", "Ficha de Seguridad"),
+    ("golpes_roturas", "Se evidencian Golpes, Roturas u Otros"),
+    ("condiciones_almacenamiento", "Â¿Cumple condiciones de Almacenamiento?"),
+    ("carta_correo", "Carta o correo de envÃ­o por parte del cliente"),
+]
+
+
+def cargar_clientes():
+    return _load(_CLIENTES_PATH, _KEY_CLIENTES)
+
+
+def guardar_cliente_nuevo(items, datos):
+    """Append a new Cliente checklist record and persist. Returns the new record."""
+    nuevo = {
+        "id": next_id(items),
+        "fecha_creacion": datetime.now().isoformat(timespec="seconds"),
+        "fecha_recepcion": datos.get("fecha_recepcion", ""),
+        "nombre_cliente": datos.get("nombre_cliente", ""),
+        "id_sustancia": datos.get("id_sustancia"),
+        "cantidad": datos.get("cantidad", ""),
+        "observacion_producto": datos.get("observacion_producto", ""),
+        "verificacion_nuevas": datos.get("verificacion_nuevas", {}),
+        "verificacion_destapadas": datos.get("verificacion_destapadas", {}),
+        "observaciones": datos.get("observaciones", ""),
+        "id_usuario_reviso": datos.get("id_usuario_reviso"),
+        "id_usuario_verifico": datos.get("id_usuario_verifico"),
+    }
+    items.append(nuevo)
+    _save(_CLIENTES_PATH, _KEY_CLIENTES, items)
+    return nuevo
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\colores_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "color_refuerzo.json")
+_KEY = "color_refuerzo"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\condiciones_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "condicion_alm.json")
+_KEY = "condicion_alm"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\entradas_mov_logica.py ====================
+
+from logica import movimientos_common as common
+from logica import bitacora_logica as bit
+from logica import inventario_mov_logica as inv
+
+
+def _normalize_text(value):
+    txt = str(value or "").replace("\n", " ").strip()
+    while "  " in txt:
+        txt = txt.replace("  ", " ")
+    return txt.upper()
+
+
+def _normalize_record_fields(record):
+    out = dict(record)
+    for key in ["lote", "catalogo", "potencia", "factura", "observaciones"]:
+        if key in out:
+            out[key] = _normalize_text(out.get(key))
+    return out
+
+
+def cargar():
+    return common.cargar_entradas()
+
+
+def agregar(record, usuario="SISTEMA"):
+    rows = cargar()
+    nuevo = {"id": common.next_id(rows), "estado": "ACTIVA", **_normalize_record_fields(record)}
+    rows.append(nuevo)
+    common.guardar_entradas(rows)
+    inv.guardar_snapshot()
+    bit.registrar_campos(
+        tipo_operacion="ENTRADAS-CREAR",
+        id_registro=nuevo.get("id"),
+        usuario=usuario,
+        cambios=[{"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"}],
+    )
+    return nuevo
+
+
+def actualizar(id_entrada, cambios, usuario="SISTEMA"):
+    cambios = _normalize_record_fields(cambios)
+    rows = cargar()
+    old = None
+    updated = None
+    for r in rows:
+        if r.get("id") == id_entrada:
+            old = dict(r)
+            r.update(cambios)
+            updated = dict(r)
+            break
+    common.guardar_entradas(rows)
+    inv.guardar_snapshot()
+    cambios_log = []
+    if old is not None and updated is not None:
+        keys = sorted(set(old.keys()) | set(updated.keys()))
+        for k in keys:
+            old_v = old.get(k)
+            new_v = updated.get(k)
+            if str(old_v) != str(new_v):
+                cambios_log.append({"campo": k, "valor_anterior": old_v, "valor_nuevo": new_v})
+    bit.registrar_campos("ENTRADAS-EDITAR", id_entrada, usuario=usuario, cambios=cambios_log)
+
+
+def anular(id_entrada, usuario="SISTEMA"):
+    entradas = cargar()
+    salidas = common.cargar_salidas()
+
+    for e in entradas:
+        if e.get("id") == id_entrada:
+            e["estado"] = "ANULADA"
+            break
+
+    # Si se anula la entrada, se anulan salidas asociadas para consistencia kardex.
+    for s in salidas:
+        if s.get("id_entrada") == id_entrada:
+            s["estado"] = "ANULADA"
+
+    common.guardar_entradas(entradas)
+    common.guardar_salidas(salidas)
+    inv.guardar_snapshot()
+    bit.registrar_campos(
+        "ENTRADAS-ANULAR",
+        id_entrada,
+        usuario=usuario,
+        cambios=[
+            {"campo": "estado", "valor_anterior": "ACTIVA", "valor_nuevo": "ANULADA"},
+            {"campo": "salidas_asociadas", "valor_anterior": "ACTIVAS", "valor_nuevo": "ANULADAS"},
+        ],
+    )
+
+
+def ultimas_15(maestras):
+    rows = sorted(cargar(), key=lambda x: x.get("id", 0), reverse=True)[:15]
+    return enriquecer(rows, maestras)
+
+
+def filtrar(fecha="", fecha_desde="", fecha_hasta="", codigo="", lote="", maestras=None):
+    maestras = maestras or common.cargar_maestras()
+    rows = cargar()
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+
+    out = []
+    codigo = str(codigo).strip()
+    lote = str(lote).strip().upper()
+    fecha = str(fecha).strip()
+    fecha_desde = str(fecha_desde).strip()
+    fecha_hasta = str(fecha_hasta).strip()
+
+    for e in rows:
+        sust = sust_by_id.get(e.get("id_sustancia"), {})
+        c = str(sust.get("codigo", ""))
+        fecha_row = str(e.get("fecha_entrada", ""))
+        if fecha and fecha_row != fecha:
+            continue
+        if fecha_desde and fecha_row and fecha_row < fecha_desde:
+            continue
+        if fecha_hasta and fecha_row and fecha_row > fecha_hasta:
+            continue
+        if codigo and not c.startswith(codigo):
+            continue
+        if lote and lote not in str(e.get("lote", "")).upper():
+            continue
+        out.append(e)
+
+    out.sort(key=lambda x: x.get("id", 0), reverse=True)
+    return enriquecer(out, maestras)
+
+
+def enriquecer(rows, maestras):
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+    uni_by_id = common.map_by_id(maestras["unidades"])
+
+    out = []
+    for e in rows:
+        s = sust_by_id.get(e.get("id_sustancia"), {})
+        u = uni_by_id.get(e.get("id_unidad"), {})
+        out.append({
+            **e,
+            "codigo": s.get("codigo", ""),
+            "nombre": s.get("nombre", ""),
+            "unidad_nombre": u.get("unidad", ""),
+        })
+    return out
+
+
+def total_salidas_activas(id_entrada):
+    salidas = common.cargar_salidas()
+    total = 0.0
+    for s in salidas:
+        if s.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        if s.get("id_entrada") == id_entrada:
+            total += common.to_float(s.get("cantidad"))
+    return total
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\fabricantes_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "fabricante.json")
+_KEY = "fabricantes"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\inventario_mov_logica.py ====================
+
+from datetime import date, datetime
+
+from logica import movimientos_common as common
+
+
+def sugerir_unidad_id(id_sustancia):
+    entradas = common.cargar_entradas()
+    for e in sorted(entradas, key=lambda x: x.get("id", 0), reverse=True):
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        if e.get("id_sustancia") == id_sustancia and e.get("id_unidad"):
+            return e.get("id_unidad")
+    return None
+
+
+def construir_inventario():
+    maestras = common.cargar_maestras()
+    entradas = common.cargar_entradas()
+    salidas = common.cargar_salidas()
+
+    sustancias_by_id = common.map_by_id(maestras["sustancias"])
+    unidades_by_id = common.map_by_id(maestras["unidades"])
+    ubicaciones_by_id = common.map_by_id(maestras["ubicaciones"])
+    colores_by_id = common.map_by_id(maestras["colores"])
+    condiciones_by_id = common.map_by_id(maestras["condiciones"])
+
+    stock = common.stock_por_entrada(entradas, salidas)
+
+    rows = []
+    for e in entradas:
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+
+        s = sustancias_by_id.get(e.get("id_sustancia"), {})
+        u = unidades_by_id.get(e.get("id_unidad"), {})
+        ub = ubicaciones_by_id.get(e.get("id_ubicacion"), {})
+        c = colores_by_id.get(e.get("id_color_refuerzo"), {})
+        ca = condiciones_by_id.get(e.get("id_condicion_alm"), {})
+
+        fecha_v = str(e.get("fecha_vencimiento", "")).strip()
+        alarma_fv = ""
+        if fecha_v:
+            try:
+                fv = datetime.strptime(fecha_v, "%Y-%m-%d").date()
+                if fv < date.today():
+                    alarma_fv = "VENCIDO"
+                elif (fv - date.today()).days <= 30:
+                    alarma_fv = "PROXIMO A VENCER"
+                else:
+                    alarma_fv = "OK"
+            except ValueError:
+                alarma_fv = ""
+
+        rows.append({
+            "id_entrada": e.get("id"),
+            "codigo": s.get("codigo", ""),
+            "propiedad": s.get("propiedad", ""),
+            "tipo_muestras": s.get("tipo_muestras", ""),
+            "uso_previsto": s.get("uso_previsto", ""),
+            "no_caja": ub.get("no_caja", ""),
+            "ubicacion": ub.get("ubicacion", ""),
+            "condicion_alm": ca.get("condicion", ""),
+            "nombre": s.get("nombre", ""),
+            "potencia": e.get("potencia", ""),
+            "lote": e.get("lote", ""),
+            "catalogo": e.get("catalogo", ""),
+            "fecha_ingreso": e.get("fecha_entrada", ""),
+            "fecha_vencimiento": e.get("fecha_vencimiento", ""),
+            "alarma_fv": alarma_fv,
+            "unidad": u.get("unidad", ""),
+            "presentacion": e.get("presentacion", ""),
+            "cantidad_minima": s.get("cantidad_minima", ""),
+            "color_refuerzo": c.get("color_refuerzo", ""),
+            "certificado_anl": "SI" if e.get("certificado_anl") else "NO",
+            "ficha_seguridad": "SI" if e.get("ficha_seguridad") else "NO",
+            "factura_compra": "SI" if e.get("factura_compra") else "NO",
+            "codigo_sistema": s.get("codigo_sistema", ""),
+            "stock": round(stock.get(e.get("id"), 0.0), 4),
+        })
+
+        cant_min = common.to_float(s.get("cantidad_minima"))
+        current_stock = common.to_float(rows[-1].get("stock"))
+        if cant_min > 0 and current_stock < cant_min:
+            rows[-1]["alarma_stock"] = "BAJO MINIMO"
+        else:
+            rows[-1]["alarma_stock"] = "OK"
+
+    rows.sort(key=lambda r: (str(r.get("codigo", "")), str(r.get("lote", ""))))
+    return rows
+
+
+def guardar_snapshot():
+    rows = construir_inventario()
+    common.save_json(common.INVENTARIO_PATH, "inventario", rows)
+    return rows
+
+
+def cargar_snapshot():
+    rows = common.load_json(common.INVENTARIO_PATH, "inventario")
+    if not rows:
+        rows = guardar_snapshot()
+    return rows
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\movimientos_common.py ====================
+
+import json
+from collections import defaultdict
+
+from app_paths import resource_path
+
+ENTRADAS_PATH = resource_path("data", "entradas.json")
+SALIDAS_PATH = resource_path("data", "salidas.json")
+SUSTANCIAS_PATH = resource_path("data", "sustancias.json")
+UNIDADES_PATH = resource_path("data", "unidad.json")
+UBICACIONES_PATH = resource_path("data", "maestrasUbicaciones.json")
+COLORES_PATH = resource_path("data", "color_refuerzo.json")
+CONDICIONES_PATH = resource_path("data", "condicion_alm.json")
+FABRICANTES_PATH = resource_path("data", "fabricante.json")
+BITACORA_PATH = resource_path("data", "bitacora.json")
+TIPOS_ENTRADA_PATH = resource_path("data", "tipo_entrada.json")
+TIPOS_SALIDA_PATH = resource_path("data", "tipo_salida.json")
+INVENTARIO_PATH = resource_path("data", "inventario.json")
+
+
+def load_json(path, key):
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get(key, [])
+
+
+def save_json(path, key, items):
+    compact_files = {
+        ENTRADAS_PATH,
+        SALIDAS_PATH,
+        BITACORA_PATH,
+        INVENTARIO_PATH,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        if path in compact_files:
+            records = [
+                "  " + json.dumps(item, ensure_ascii=False, separators=(", ", ": "))
+                for item in items
+            ]
+            if records:
+                f.write("{ \"" + key + "\": [\n")
+                f.write(",\n".join(records))
+                f.write("\n] }\n")
+            else:
+                f.write("{ \"" + key + "\": [] }\n")
+        else:
+            json.dump({key: items}, f, ensure_ascii=False, indent=2)
+
+
+def next_id(items):
+    return max((i.get("id", 0) for i in items), default=0) + 1
+
+
+def to_float(value):
+    try:
+        txt = str(value).replace(",", ".").strip()
+        return float(txt) if txt else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def map_by_id(rows):
+    return {r["id"]: r for r in rows if "id" in r}
+
+
+def map_sustancia_by_codigo(sustancias):
+    out = {}
+    for s in sustancias:
+        codigo = str(s.get("codigo", "")).strip()
+        if codigo:
+            out[codigo] = s
+    return out
+
+
+def cargar_maestras():
+    sustancias = load_json(SUSTANCIAS_PATH, "maestrasSustancias")
+    unidades = load_json(UNIDADES_PATH, "unidad")
+    ubicaciones = load_json(UBICACIONES_PATH, "maestrasUbicaciones")
+    colores = load_json(COLORES_PATH, "color_refuerzo")
+    condiciones = load_json(CONDICIONES_PATH, "condicion_alm")
+    fabricantes = load_json(FABRICANTES_PATH, "fabricantes")
+    tipos_entrada = load_json(TIPOS_ENTRADA_PATH, "tipos_entrada")
+    tipos_salida = load_json(TIPOS_SALIDA_PATH, "tipos_salida")
+
+    def activos(rows):
+        return [r for r in rows if r.get("estado", "HABILITADA") == "HABILITADA"]
+
+    return {
+        "sustancias": activos(sustancias),
+        "unidades": activos(unidades),
+        "ubicaciones": activos(ubicaciones),
+        "colores": activos(colores),
+        "condiciones": activos(condiciones),
+        "fabricantes": activos(fabricantes),
+        "tipos_entrada": activos(tipos_entrada),
+        "tipos_salida": activos(tipos_salida),
+    }
+
+
+def cargar_entradas():
+    rows = load_json(ENTRADAS_PATH, "entradas")
+    for r in rows:
+        r.setdefault("estado", "ACTIVA")
+    return rows
+
+
+def guardar_entradas(rows):
+    save_json(ENTRADAS_PATH, "entradas", rows)
+
+
+def cargar_salidas():
+    rows = load_json(SALIDAS_PATH, "salidas")
+    for r in rows:
+        r.setdefault("estado", "ACTIVA")
+    return rows
+
+
+def guardar_salidas(rows):
+    save_json(SALIDAS_PATH, "salidas", rows)
+
+
+def stock_por_entrada(entradas, salidas):
+    salidas_acum = defaultdict(float)
+    for s in salidas:
+        if s.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        entrada_id = s.get("id_entrada")
+        salidas_acum[entrada_id] += to_float(s.get("cantidad"))
+
+    stock = {}
+    for e in entradas:
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        ingreso = to_float(e.get("cantidad"))
+        egreso = salidas_acum[e.get("id", -1)]
+        stock[e.get("id", -1)] = max(0.0, ingreso - egreso)
+    return stock
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\movimientos_logica.py ====================
+
+import json
+from collections import defaultdict
+from datetime import date, datetime
+
+from app_paths import resource_path
+
+_ENTRADAS_PATH = resource_path("data", "entradas.json")
+_SALIDAS_PATH = resource_path("data", "salidas.json")
+_SUSTANCIAS_PATH = resource_path("data", "sustancias.json")
+_UNIDADES_PATH = resource_path("data", "unidad.json")
+_UBICACIONES_PATH = resource_path("data", "maestrasUbicaciones.json")
+_COLORES_PATH = resource_path("data", "color_refuerzo.json")
+_CONDICIONES_PATH = resource_path("data", "condicion_alm.json")
+_FABRICANTES_PATH = resource_path("data", "fabricante.json")
+
+
+def _load(path, key):
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get(key, [])
+
+
+def _save(path, key, items):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({key: items}, f, ensure_ascii=False, indent=2)
+
+
+def _next_id(items):
+    return max((i.get("id", 0) for i in items), default=0) + 1
+
+
+def _to_float(value):
+    try:
+        txt = str(value).replace(",", ".").strip()
+        return float(txt) if txt else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def cargar_entradas():
+    return _load(_ENTRADAS_PATH, "entradas")
+
+
+def cargar_salidas():
+    return _load(_SALIDAS_PATH, "salidas")
+
+
+def guardar_entradas(items):
+    _save(_ENTRADAS_PATH, "entradas", items)
+
+
+def guardar_salidas(items):
+    _save(_SALIDAS_PATH, "salidas", items)
+
+
+def cargar_maestras():
+    sustancias = _load(_SUSTANCIAS_PATH, "maestrasSustancias")
+    unidades = _load(_UNIDADES_PATH, "unidad")
+    ubicaciones = _load(_UBICACIONES_PATH, "maestrasUbicaciones")
+    colores = _load(_COLORES_PATH, "color_refuerzo")
+    condiciones = _load(_CONDICIONES_PATH, "condicion_alm")
+    fabricantes = _load(_FABRICANTES_PATH, "fabricantes")
+
+    # Solo opciones activas (si el campo existe)
+    def _activos(rows):
+        return [r for r in rows if r.get("estado", "HABILITADA") == "HABILITADA"]
+
+    return {
+        "sustancias": _activos(sustancias),
+        "unidades": _activos(unidades),
+        "ubicaciones": _activos(ubicaciones),
+        "colores": _activos(colores),
+        "condiciones": condiciones,
+        "fabricantes": _activos(fabricantes),
+    }
+
+
+def agregar_entrada(record):
+    entradas = cargar_entradas()
+    nuevo = {"id": _next_id(entradas), **record}
+    entradas.append(nuevo)
+    guardar_entradas(entradas)
+    return nuevo
+
+
+def agregar_salida(record):
+    salidas = cargar_salidas()
+    nuevo = {"id": _next_id(salidas), **record}
+    salidas.append(nuevo)
+    guardar_salidas(salidas)
+    return nuevo
+
+
+def map_by_id(rows):
+    return {r["id"]: r for r in rows if "id" in r}
+
+
+def map_sustancia_by_codigo(sustancias):
+    out = {}
+    for s in sustancias:
+        codigo = str(s.get("codigo", "")).strip()
+        if codigo:
+            out[codigo] = s
+    return out
+
+
+def stock_por_entrada(entradas, salidas):
+    salidas_acum = defaultdict(float)
+    for s in salidas:
+        entrada_id = s.get("id_entrada")
+        salidas_acum[entrada_id] += _to_float(s.get("cantidad"))
+
+    stock = {}
+    for e in entradas:
+        ingreso = _to_float(e.get("cantidad"))
+        egreso = salidas_acum[e.get("id", -1)]
+        stock[e.get("id", -1)] = max(0.0, ingreso - egreso)
+    return stock
+
+
+def lotes_disponibles_por_sustancia(id_sustancia):
+    entradas = cargar_entradas()
+    salidas = cargar_salidas()
+    stock = stock_por_entrada(entradas, salidas)
+
+    disponibles = []
+    for e in entradas:
+        if e.get("id_sustancia") != id_sustancia:
+            continue
+        disponible = stock.get(e.get("id"), 0.0)
+        if disponible <= 0:
+            continue
+        disponibles.append({
+            "id_entrada": e.get("id"),
+            "lote": e.get("lote", ""),
+            "catalogo": e.get("catalogo", ""),
+            "disponible": round(disponible, 4),
+            "id_unidad": e.get("id_unidad"),
+        })
+    return disponibles
+
+
+def sugerir_unidad_id(id_sustancia):
+    entradas = cargar_entradas()
+    for e in sorted(entradas, key=lambda x: x.get("id", 0), reverse=True):
+        if e.get("id_sustancia") == id_sustancia and e.get("id_unidad"):
+            return e.get("id_unidad")
+    return None
+
+
+def construir_inventario():
+    maestras = cargar_maestras()
+    entradas = cargar_entradas()
+    salidas = cargar_salidas()
+
+    sustancias_by_id = map_by_id(maestras["sustancias"])
+    unidades_by_id = map_by_id(maestras["unidades"])
+    ubicaciones_by_id = map_by_id(maestras["ubicaciones"])
+    colores_by_id = map_by_id(maestras["colores"])
+    condiciones_by_id = map_by_id(maestras["condiciones"])
+
+    stock = stock_por_entrada(entradas, salidas)
+
+    rows = []
+    for e in entradas:
+        s = sustancias_by_id.get(e.get("id_sustancia"), {})
+        u = unidades_by_id.get(e.get("id_unidad"), {})
+        ub = ubicaciones_by_id.get(e.get("id_ubicacion"), {})
+        c = colores_by_id.get(e.get("id_color_refuerzo"), {})
+        ca = condiciones_by_id.get(e.get("id_condicion_alm"), {})
+
+        fecha_v = str(e.get("fecha_vencimiento", "")).strip()
+        alarma_fv = ""
+        if fecha_v:
+            try:
+                fv = datetime.strptime(fecha_v, "%Y-%m-%d").date()
+                if fv < date.today():
+                    alarma_fv = "VENCIDO"
+                elif (fv - date.today()).days <= 30:
+                    alarma_fv = "PROXIMO A VENCER"
+                else:
+                    alarma_fv = "OK"
+            except ValueError:
+                alarma_fv = ""
+
+        rows.append({
+            "id_entrada": e.get("id"),
+            "codigo": s.get("codigo", ""),
+            "propiedad": s.get("propiedad", ""),
+            "tipo_muestras": s.get("tipo_muestras", ""),
+            "uso_previsto": s.get("uso_previsto", ""),
+            "no_caja": ub.get("no_caja", ""),
+            "ubicacion": ub.get("ubicacion", ""),
+            "condicion_alm": ca.get("condicion", ""),
+            "nombre": s.get("nombre", ""),
+            "potencia": e.get("potencia", ""),
+            "lote": e.get("lote", ""),
+            "catalogo": e.get("catalogo", ""),
+            "fecha_ingreso": e.get("fecha_entrada", ""),
+            "fecha_vencimiento": e.get("fecha_vencimiento", ""),
+            "alarma_fv": alarma_fv,
+            "unidad": u.get("unidad", ""),
+            "presentacion": e.get("presentacion", ""),
+            "cantidad_minima": s.get("cantidad_minima", ""),
+            "color_refuerzo": c.get("color_refuerzo", ""),
+            "certificado_anl": "SI" if e.get("certificado_anl") else "NO",
+            "ficha_seguridad": "SI" if e.get("ficha_seguridad") else "NO",
+            "factura_compra": "SI" if e.get("factura_compra") else "NO",
+            "codigo_sistema": s.get("codigo_sistema", ""),
+            "stock": round(stock.get(e.get("id"), 0.0), 4),
+        })
+
+    rows.sort(key=lambda r: (str(r.get("codigo", "")), str(r.get("lote", ""))))
+    return rows
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\prestamos_logica.py ====================
+
+from datetime import datetime
+import json
+
+from app_paths import resource_path
+from logica import bitacora_logica as bit
+from logica import movimientos_common as common
+from logica import salidas_mov_logica as sal
+from logica import usuarios_logica as usr
+
+PRESTAMOS_PATH = resource_path("data", "prestamos.json")
+RECIBOS_PATH = resource_path("data", "recibos.json")
+
+
+def _normalize_obs(value):
+    txt = str(value or "").replace("\n", " ").strip()
+    while "  " in txt:
+        txt = txt.replace("  ", " ")
+    return txt.upper()
+
+
+def _load_json_safe(path, key):
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return []
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    return data.get(key, []) if isinstance(data, dict) else []
+
+
+def _save_compact(path, key, items):
+    records = [
+        "  " + json.dumps(item, ensure_ascii=False, separators=(", ", ": "))
+        for item in items
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        if records:
+            f.write('{ "' + key + '\": [\n')
+            f.write(",\n".join(records))
+            f.write("\n] }\n")
+        else:
+            f.write('{ "' + key + '\": [] }\n')
+
+
+def cargar_prestamos():
+    rows = _load_json_safe(PRESTAMOS_PATH, "prestamos")
+    for r in rows:
+        r.setdefault("estado", "PENDIENTE")
+    return rows
+
+
+def guardar_prestamos(rows):
+    _save_compact(PRESTAMOS_PATH, "prestamos", rows)
+
+
+def cargar_recibos():
+    return _load_json_safe(RECIBOS_PATH, "recibos")
+
+
+def guardar_recibos(rows):
+    _save_compact(RECIBOS_PATH, "recibos", rows)
+
+
+def usuarios_habilitados():
+    return [u for u in usr.cargar() if u.get("estado", "HABILITADA") == "HABILITADA"]
+
+
+def codigos_con_stock(maestras):
+    return sal.codigos_con_stock_disponible(maestras)
+
+
+def lotes_disponibles(id_sustancia):
+    return sal.lotes_disponibles_por_sustancia(id_sustancia)
+
+
+def _tipo_salida_prestamo_id(maestras):
+    for r in maestras.get("tipos_salida", []):
+        nombre = str(r.get("tipo_salida", "")).strip().upper()
+        if nombre in {"PRESTAMO", "PRÃ‰STAMO"}:
+            return r.get("id")
+    return None
+
+
+def crear_prestamo(datos, usuario_presta="SISTEMA"):
+    rows = cargar_prestamos()
+    now_txt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    nuevo = {
+        "id": common.next_id(rows),
+        "fecha_creacion": now_txt,
+        "fecha_prestamo": datos.get("fecha_prestamo", datetime.now().strftime("%Y-%m-%d")),
+        "id_sustancia": datos.get("id_sustancia"),
+        "id_entrada": datos.get("id_entrada"),
+        "id_unidad": datos.get("id_unidad"),
+        "cantidad": float(datos.get("cantidad", 0)),
+        "id_usuario_presta": datos.get("id_usuario_presta"),
+        "id_usuario_destino": datos.get("id_usuario_destino"),
+        "firma_presta_path": datos.get("firma_presta_path", ""),
+        "observacion": _normalize_obs(datos.get("observacion", "")),
+        "estado": "PENDIENTE",
+    }
+    rows.append(nuevo)
+    guardar_prestamos(rows)
+
+    bit.registrar_campos(
+        tipo_operacion="PRESTAMO-CREAR",
+        id_registro=nuevo.get("id"),
+        usuario=usuario_presta,
+        cambios=[{"campo": "estado", "valor_anterior": "", "valor_nuevo": "PENDIENTE"}],
+    )
+    return nuevo
+
+
+def _enriquecer_prestamo(prestamo, maestras, usuarios_by_id):
+    sust_by_id = common.map_by_id(maestras.get("sustancias", []))
+    uni_by_id = common.map_by_id(maestras.get("unidades", []))
+    sust = sust_by_id.get(prestamo.get("id_sustancia"), {})
+    uni = uni_by_id.get(prestamo.get("id_unidad"), {})
+    presta = usuarios_by_id.get(prestamo.get("id_usuario_presta"), {})
+    destino = usuarios_by_id.get(prestamo.get("id_usuario_destino"), {})
+    return {
+        **prestamo,
+        "codigo": sust.get("codigo", ""),
+        "nombre": sust.get("nombre", ""),
+        "lote": _lote_por_entrada(prestamo.get("id_entrada")),
+        "unidad": uni.get("unidad", ""),
+        "usuario_presta_nombre": presta.get("nombre") or presta.get("usuario", ""),
+        "usuario_destino_nombre": destino.get("nombre") or destino.get("usuario", ""),
+    }
+
+
+def _lote_por_entrada(id_entrada):
+    for e in common.cargar_entradas():
+        if e.get("id") == id_entrada:
+            return e.get("lote", "")
+    return ""
+
+
+def meses_prestamos_emitidos(id_usuario):
+    rows = [r for r in cargar_prestamos() if r.get("id_usuario_presta") == id_usuario]
+    meses = set()
+    for r in rows:
+        fecha = str(r.get("fecha_prestamo", "")).strip()
+        if len(fecha) >= 7 and fecha[4] == "-":
+            meses.add(fecha[:7])
+    return sorted(meses, reverse=True)
+
+
+def prestamos_emitidos_por_usuario(id_usuario, maestras, mes="", limit=15):
+    usuarios = usuarios_habilitados()
+    usuarios_by_id = common.map_by_id(usuarios)
+    rows = [r for r in cargar_prestamos() if r.get("id_usuario_presta") == id_usuario]
+
+    mes = str(mes or "").strip()
+    if mes:
+        rows = [r for r in rows if str(r.get("fecha_prestamo", "")).startswith(mes)]
+
+    rows.sort(key=lambda x: x.get("id", 0), reverse=True)
+    if limit is not None and limit > 0:
+        rows = rows[:limit]
+    return [_enriquecer_prestamo(r, maestras, usuarios_by_id) for r in rows]
+
+
+def prestamos_pendientes_para_usuario(id_usuario, maestras):
+    usuarios = usuarios_habilitados()
+    usuarios_by_id = common.map_by_id(usuarios)
+    rows = [
+        r for r in cargar_prestamos()
+        if r.get("id_usuario_destino") == id_usuario and r.get("estado", "PENDIENTE") == "PENDIENTE"
+    ]
+    rows.sort(key=lambda x: x.get("id", 0), reverse=True)
+    return [_enriquecer_prestamo(r, maestras, usuarios_by_id) for r in rows]
+
+
+def responder_prestamo(id_prestamo, id_usuario_recibe, aceptar, observacion_recibo="", usuario_accion="SISTEMA"):
+    prestamos = cargar_prestamos()
+    idx = next((i for i, p in enumerate(prestamos) if p.get("id") == id_prestamo), None)
+    if idx is None:
+        return False, "No se encontrÃ³ el prÃ©stamo seleccionado."
+
+    prestamo = prestamos[idx]
+    if prestamo.get("estado", "PENDIENTE") != "PENDIENTE":
+        return False, "Este prÃ©stamo ya fue respondido."
+
+    if int(prestamo.get("id_usuario_destino") or 0) != int(id_usuario_recibe or 0):
+        return False, "El prÃ©stamo no corresponde al usuario autenticado."
+
+    if aceptar:
+        lotes = sal.lotes_disponibles_por_sustancia(prestamo.get("id_sustancia"))
+        lote = next((l for l in lotes if l.get("id_entrada") == prestamo.get("id_entrada")), None)
+        disponible = common.to_float(lote.get("disponible") if lote else 0)
+        cantidad = common.to_float(prestamo.get("cantidad"))
+        if cantidad <= 0:
+            return False, "Cantidad de prÃ©stamo invÃ¡lida."
+        if disponible < cantidad:
+            return False, f"Stock insuficiente para aceptar. Disponible actual: {disponible}"
+
+        maestras = common.cargar_maestras()
+        usuarios = usuarios_habilitados()
+        usuarios_by_id = common.map_by_id(usuarios)
+        presta = usuarios_by_id.get(prestamo.get("id_usuario_presta"), {})
+        tipo_salida_id = _tipo_salida_prestamo_id(maestras)
+
+        record_salida = {
+            "fecha_salida": datetime.now().strftime("%Y-%m-%d"),
+            "id_tipo_salida": tipo_salida_id,
+            "id_sustancia": prestamo.get("id_sustancia"),
+            "id_entrada": prestamo.get("id_entrada"),
+            "id_unidad": prestamo.get("id_unidad"),
+            "cantidad": cantidad,
+            "actividad": f"PRESTAMO A {(usuarios_by_id.get(id_usuario_recibe, {}).get('usuario') or '').upper()}",
+            "observacion": _normalize_obs(
+                f"PrÃ©stamo aprobado por receptor. Prestador: {presta.get('usuario', '')}. {observacion_recibo}"
+            ),
+        }
+        salida = sal.agregar(record_salida, usuario=usuario_accion)
+        id_salida = salida.get("id")
+        nuevo_estado = "ACEPTADO"
+    else:
+        id_salida = None
+        nuevo_estado = "RECHAZADO"
+
+    prestamo["estado"] = nuevo_estado
+    prestamo["fecha_respuesta"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    prestamo["id_usuario_recibe"] = id_usuario_recibe
+    guardar_prestamos(prestamos)
+
+    recibos = cargar_recibos()
+    recibo = {
+        "id": common.next_id(recibos),
+        "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "id_prestamo": id_prestamo,
+        "id_sustancia": prestamo.get("id_sustancia"),
+        "id_usuario_presta": prestamo.get("id_usuario_presta"),
+        "id_usuario_recibe": id_usuario_recibe,
+        "cantidad": prestamo.get("cantidad"),
+        "recibio": bool(aceptar),
+        "estado": nuevo_estado,
+        "observacion": _normalize_obs(observacion_recibo),
+        "id_salida": id_salida,
+    }
+    recibos.append(recibo)
+    guardar_recibos(recibos)
+
+    bit.registrar_campos(
+        tipo_operacion="PRESTAMO-RESPUESTA",
+        id_registro=id_prestamo,
+        usuario=usuario_accion,
+        cambios=[{"campo": "estado", "valor_anterior": "PENDIENTE", "valor_nuevo": nuevo_estado}],
+    )
+
+    return True, "PrÃ©stamo procesado correctamente."
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\salidas_mov_logica.py ====================
+
+from logica import movimientos_common as common
+from logica import bitacora_logica as bit
+from logica import inventario_mov_logica as inv
+
+
+def _normalize_text(value):
+    txt = str(value or "").replace("\n", " ").strip()
+    while "  " in txt:
+        txt = txt.replace("  ", " ")
+    return txt.upper()
+
+
+def _normalize_record_fields(record):
+    out = dict(record)
+    for key in ["actividad", "observacion"]:
+        if key in out:
+            out[key] = _normalize_text(out.get(key))
+    return out
+
+
+def cargar():
+    return common.cargar_salidas()
+
+
+def agregar(record, usuario="SISTEMA"):
+    rows = cargar()
+    nuevo = {"id": common.next_id(rows), "estado": "ACTIVA", **_normalize_record_fields(record)}
+    rows.append(nuevo)
+    common.guardar_salidas(rows)
+    inv.guardar_snapshot()
+
+    cambios = [
+        {"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"},
+        {"campo": "cantidad", "valor_anterior": "0", "valor_nuevo": nuevo.get("cantidad", "")},
+    ]
+    if nuevo.get("id_entrada") is not None:
+        cambios.append({
+            "campo": "id_entrada",
+            "valor_anterior": "",
+            "valor_nuevo": nuevo.get("id_entrada", ""),
+        })
+
+    bit.registrar_campos(
+        tipo_operacion="SALIDAS-CREAR",
+        id_registro=nuevo.get("id"),
+        usuario=usuario,
+        cambios=cambios,
+    )
+    return nuevo
+
+
+def actualizar(id_salida, cambios, usuario="SISTEMA"):
+    cambios = _normalize_record_fields(cambios)
+    rows = cargar()
+    old = None
+    updated = None
+    for r in rows:
+        if r.get("id") == id_salida:
+            old = dict(r)
+            r.update(cambios)
+            updated = dict(r)
+            break
+    common.guardar_salidas(rows)
+    inv.guardar_snapshot()
+    cambios_log = []
+    if old is not None and updated is not None:
+        keys = sorted(set(old.keys()) | set(updated.keys()))
+        for k in keys:
+            old_v = old.get(k)
+            new_v = updated.get(k)
+            if str(old_v) != str(new_v):
+                cambios_log.append({"campo": k, "valor_anterior": old_v, "valor_nuevo": new_v})
+    bit.registrar_campos("SALIDAS-EDITAR", id_salida, usuario=usuario, cambios=cambios_log)
+
+
+def anular(id_salida, usuario="SISTEMA"):
+    rows = cargar()
+    for r in rows:
+        if r.get("id") == id_salida:
+            r["estado"] = "ANULADA"
+            break
+    common.guardar_salidas(rows)
+    inv.guardar_snapshot()
+    bit.registrar_campos(
+        "SALIDAS-ANULAR",
+        id_salida,
+        usuario=usuario,
+        cambios=[{"campo": "estado", "valor_anterior": "ACTIVA", "valor_nuevo": "ANULADA"}],
+    )
+
+
+def lotes_disponibles_por_sustancia(id_sustancia):
+    entradas = common.cargar_entradas()
+    salidas = common.cargar_salidas()
+    stock = common.stock_por_entrada(entradas, salidas)
+
+    disponibles = []
+    for e in entradas:
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        if e.get("id_sustancia") != id_sustancia:
+            continue
+        disponible = stock.get(e.get("id"), 0.0)
+        if disponible <= 0:
+            continue
+        disponibles.append({
+            "id_entrada": e.get("id"),
+            "lote": e.get("lote", ""),
+            "catalogo": e.get("catalogo", ""),
+            "disponible": round(disponible, 4),
+            "id_unidad": e.get("id_unidad"),
+        })
+    return disponibles
+
+
+def codigos_con_stock_disponible(maestras):
+    entradas = common.cargar_entradas()
+    salidas = common.cargar_salidas()
+    stock = common.stock_por_entrada(entradas, salidas)
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+
+    codigos = set()
+    for e in entradas:
+        if e.get("estado", "ACTIVA") != "ACTIVA":
+            continue
+        if stock.get(e.get("id"), 0.0) <= 0:
+            continue
+        sust = sust_by_id.get(e.get("id_sustancia"), {})
+        codigo = str(sust.get("codigo", "")).strip()
+        if codigo:
+            codigos.add(codigo)
+    return sorted(codigos, key=lambda x: (len(x), x))
+
+
+def ultimas_15(maestras):
+    rows = sorted(cargar(), key=lambda x: x.get("id", 0), reverse=True)[:15]
+    return enriquecer(rows, maestras)
+
+
+def filtrar(fecha="", fecha_desde="", fecha_hasta="", codigo="", lote="", maestras=None):
+    maestras = maestras or common.cargar_maestras()
+    rows = cargar()
+    entradas = common.cargar_entradas()
+    ent_by_id = common.map_by_id(entradas)
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+
+    out = []
+    codigo = str(codigo).strip()
+    lote = str(lote).strip().upper()
+    fecha = str(fecha).strip()
+    fecha_desde = str(fecha_desde).strip()
+    fecha_hasta = str(fecha_hasta).strip()
+
+    for s in rows:
+        ent = ent_by_id.get(s.get("id_entrada"), {})
+        sust = sust_by_id.get(s.get("id_sustancia"), {})
+        c = str(sust.get("codigo", ""))
+        fecha_row = str(s.get("fecha_salida", ""))
+        if fecha and fecha_row != fecha:
+            continue
+        if fecha_desde and fecha_row and fecha_row < fecha_desde:
+            continue
+        if fecha_hasta and fecha_row and fecha_row > fecha_hasta:
+            continue
+        if codigo and not c.startswith(codigo):
+            continue
+        if lote and lote not in str(ent.get("lote", "")).upper():
+            continue
+        out.append(s)
+
+    out.sort(key=lambda x: x.get("id", 0), reverse=True)
+    return enriquecer(out, maestras)
+
+
+def enriquecer(rows, maestras):
+    entradas = common.cargar_entradas()
+    ent_by_id = common.map_by_id(entradas)
+    sust_by_id = common.map_by_id(maestras["sustancias"])
+    uni_by_id = common.map_by_id(maestras["unidades"])
+
+    out = []
+    for s in rows:
+        e = ent_by_id.get(s.get("id_entrada"), {})
+        sust = sust_by_id.get(s.get("id_sustancia"), {})
+        uni = uni_by_id.get(s.get("id_unidad"), {})
+        if not uni:
+            uni = uni_by_id.get(e.get("id_unidad"), {})
+        out.append({
+            **s,
+            "codigo": sust.get("codigo", ""),
+            "nombre": sust.get("nombre", ""),
+            "lote": e.get("lote", ""),
+            "unidad_nombre": uni.get("unidad", ""),
+        })
+    return out
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\sustancias_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "sustancias.json")
+_KEY = "maestrasSustancias"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\tipos_entrada_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "tipo_entrada.json")
+_KEY = "tipos_entrada"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\tipos_salida_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "tipo_salida.json")
+_KEY = "tipos_salida"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\ubicaciones_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "maestrasUbicaciones.json")
+_KEY = "maestrasUbicaciones"
+
+SUFIJOS = {"FREEZER": "F", "NEVERA": "N", "CABINA": "C"}
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\unidades_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "unidad.json")
+_KEY = "unidad"
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = datos.get(_KEY, [])
+    for r in registros:
+        r.setdefault("estado", "HABILITADA")
+    return registros
+
+
+def _guardar(registros: list):
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)
+
+==================== FILE: C:\Users\piedr\OneDrive\Desktop\primarias\Primarias\logica\usuarios_logica.py ====================
+
+import json
+
+from app_paths import resource_path
+
+_DATA_PATH = resource_path("data", "usuarios.json")
+_KEY = "usuarios"
+
+_DEFAULT_PERMISOS = {
+    "entradas": True,
+    "salidas": True,
+    "inventario": True,
+    "bitacora": True,
+    "prestamos": True,
+    "sustancias": True,
+    "tipos_entrada": True,
+    "tipos_salida": True,
+    "fabricantes": True,
+    "unidades": True,
+    "ubicaciones": True,
+    "condiciones": True,
+    "colores": True,
+    "usuarios": True,
+    "firma_path": "",
+    "firma_password": "",
+}
+
+
+def _normalizar(r: dict) -> dict:
+    src_permisos = r.get("permisos", {}) if isinstance(r.get("permisos", {}), dict) else {}
+    permisos = dict(_DEFAULT_PERMISOS)
+    permisos.update(src_permisos)
+
+    # Compatibilidad con estructura anterior de permisos.
+    if "stock" in src_permisos:
+        permisos["inventario"] = bool(src_permisos.get("stock"))
+    if "auditoria" in src_permisos:
+        permisos["bitacora"] = bool(src_permisos.get("auditoria"))
+
+    return {
+        "id": r.get("id"),
+        "usuario": r.get("usuario") or r.get("nombre", ""),
+        "contrasena": r.get("contrasena") or r.get("contraseÃ±a", ""),
+        "nombre": r.get("nombre", ""),
+        "rol": r.get("rol", ""),
+        "permisos": permisos,
+        "estado": r.get("estado", "HABILITADA"),
+    }
+
+
+def cargar() -> list:
+    with open(_DATA_PATH, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+    registros = [_normalizar(r) for r in datos.get(_KEY, [])]
+    return registros
+
+
+def _guardar(registros: list):
+    records = [
+        "  " + json.dumps(r, ensure_ascii=False, separators=(", ", ": "))
+        for r in registros
+    ]
+    with open(_DATA_PATH, "w", encoding="utf-8") as f:
+        if records:
+            f.write("{ \"usuarios\": [\n")
+            f.write(",\n".join(records))
+            f.write("\n] }\n")
+        else:
+            f.write("{ \"usuarios\": [] }\n")
+
+
+def agregar(registros: list, datos: dict) -> dict:
+    max_id = max((r["id"] for r in registros), default=0)
+    nuevo = _normalizar({"id": max_id + 1, "estado": "HABILITADA", **datos})
+    registros.append(nuevo)
+    _guardar(registros)
+    return nuevo
+
+
+def actualizar(registros: list, id_: int, datos: dict):
+    for r in registros:
+        if r["id"] == id_:
+            r.update(datos)
+            break
+    _guardar(registros)
+
+
+def habilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "HABILITADA"
+            break
+    _guardar(registros)
+
+
+def inhabilitar(registros: list, id_: int):
+    for r in registros:
+        if r["id"] == id_:
+            r["estado"] = "INHABILITADA"
+            break
+    _guardar(registros)

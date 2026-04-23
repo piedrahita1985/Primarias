@@ -11,6 +11,7 @@ from logica import check_logica as chk
 from logica import movimientos_common as common
 from logica import usuarios_logica as usr
 from UI._mov_utils import (
+    apply_default_window,
     draw_title,
     get_date_value,
     make_date_input,
@@ -34,8 +35,7 @@ class CheckClienteWindow(tk.Toplevel):
         super().__init__(master)
         self.title("Lista de Chequeo – Recepción Sustancias de Referencia por el Cliente")
         self.configure(bg=COLORS["secondary"])
-        self.geometry("1100x900")
-        self.minsize(900, 720)
+        apply_default_window(self)
 
         self._maestras = common.cargar_maestras()
         self._sustancias_by_codigo = common.map_sustancia_by_codigo(self._maestras["sustancias"])

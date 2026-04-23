@@ -11,6 +11,7 @@ _DEFAULT_PERMISOS = {
     "inventario": True,
     "bitacora": True,
     "prestamos": True,
+    "recibidos": True,
     "sustancias": True,
     "tipos_entrada": True,
     "tipos_salida": True,
@@ -35,6 +36,8 @@ def _normalizar(r: dict) -> dict:
         permisos["inventario"] = bool(src_permisos.get("stock"))
     if "auditoria" in src_permisos:
         permisos["bitacora"] = bool(src_permisos.get("auditoria"))
+    if "recibidos" not in src_permisos:
+        permisos["recibidos"] = bool(permisos.get("prestamos", False))
 
     return {
         "id": r.get("id"),

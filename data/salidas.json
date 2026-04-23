@@ -1,9 +1,3 @@
 { "salidas": [
-  {"id": 1, "estado": "ACTIVA", "fecha_salida": "2026-04-14", "id_tipo_salida": 2, "id_sustancia": 10, "id_entrada": 1, "id_unidad": 3, "cantidad": 80.0, "actividad": "REAL HASTA LA MUERTE", "observacion": "SE GASTARON"},
-  {"id": 2, "estado": "ACTIVA", "fecha_salida": "2026-04-14", "id_tipo_salida": 3, "id_sustancia": 10, "id_entrada": 1, "id_unidad": 3, "cantidad": 10.0, "actividad": "PRESTAMO A PRUEBAP", "observacion": "Préstamo aprobado por receptor. Prestador: admin. ok"},
-  {"id": 3, "estado": "ACTIVA", "fecha_salida": "2026-04-14", "id_tipo_salida": 1, "id_sustancia": 1, "id_entrada": 2, "id_unidad": 1, "cantidad": 1.5, "actividad": "QA CONSUMO", "observacion": "qa salida inicial"},
-  {"id": 4, "estado": "ACTIVA", "fecha_salida": "2026-04-14", "id_tipo_salida": 3, "id_sustancia": 1, "id_entrada": 2, "id_unidad": 1, "cantidad": 2.0, "actividad": "PRESTAMO A PRUEBAP", "observacion": "PRÉSTAMO APROBADO POR RECEPTOR. PRESTADOR: ADMIN. RECIBIDO OK"},
-  {"id": 5, "estado": "ACTIVA", "fecha_salida": "2026-04-14", "id_tipo_salida": 1, "id_sustancia": 1, "id_entrada": 2, "id_unidad": 1, "cantidad": 0.1, "actividad": "QA MINI ACTIVIDAD", "observacion": "SALIDA MINI"},
-  {"id": 6, "estado": "ACTIVA", "fecha_salida": "2026-04-14", "id_tipo_salida": 1, "id_sustancia": 1, "id_entrada": 2, "id_unidad": 1, "cantidad": 0.2, "actividad": "QA BITACORA CANTIDAD", "observacion": "TEST CANTIDAD"},
-  {"id": 7, "estado": "ACTIVA", "fecha_salida": "2026-04-22", "id_tipo_salida": 3, "id_sustancia": 1, "id_entrada": 2, "id_unidad": 1, "cantidad": 1.0, "actividad": "PRESTAMO A PRUEBAP", "observacion": "PRÉSTAMO APROBADO POR RECEPTOR. PRESTADOR: ADMIN. MAL ESTADO"}
+  
 ] }

@@ -7,7 +7,7 @@ from PIL import Image, ImageTk
 from config.config import COLORS
 from logica import movimientos_common as common
 from logica import prestamos_logica as prest
-from UI._mov_utils import draw_title
+from UI._mov_utils import attach_treeview_sorting, apply_default_window, draw_title, get_date_value, make_date_widget
 
 
 def open_window(master):
@@ -19,8 +19,7 @@ class PrestamosWindow(tk.Toplevel):
         super().__init__(master)
         self.title("Sistema de Gestion - Prestamos")
         self.configure(bg=COLORS["secondary"])
-        self.geometry("1320x860")
-        self.minsize(1120, 720)
+        apply_default_window(self, min_width=1120, min_height=720)
 
         self._maestras = common.cargar_maestras()
         self._sustancias_by_codigo = common.map_sustancia_by_codigo(self._maestras["sustancias"])
@@ -62,6 +61,10 @@ class PrestamosWindow(tk.Toplevel):
         self.v_cantidad = tk.StringVar()
         self.v_destino = tk.StringVar()
         self.v_mes_historial = tk.StringVar()
+        self.v_hist_codigo = tk.StringVar()
+        self.v_hist_lote = tk.StringVar()
+        self.v_hist_destino = tk.StringVar()
+        self.v_hist_estado = tk.StringVar()
 
     def _build_ui(self):
         draw_title(self, "Sistema de Gestion - Prestamos")
@@ -70,11 +73,13 @@ class PrestamosWindow(tk.Toplevel):
         wrap.pack(fill="both", expand=True, padx=10, pady=10)
         wrap.grid_rowconfigure(1, weight=1)
         wrap.grid_columnconfigure(0, weight=1)
-        wrap.grid_columnconfigure(1, weight=1)
 
         self._build_registro(wrap)
-        self._build_pendientes(wrap)
         self._build_emitidos(wrap)
+
+        bottom = tk.Frame(self, bg=COLORS["secondary"])
+        bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+        self._button(bottom, "Salir", "#6C757D", self.destroy).pack(side="right")
 
     def _build_registro(self, parent):
         sec = tk.LabelFrame(
@@ -86,7 +91,7 @@ class PrestamosWindow(tk.Toplevel):
             padx=8,
             pady=8,
         )
-        sec.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, 8))
+        sec.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
         for c in range(4):
             sec.grid_columnconfigure(c, weight=1)
 
@@ -113,18 +118,18 @@ class PrestamosWindow(tk.Toplevel):
         self.cb_destino = ttk.Combobox(sec, textvariable=self.v_destino, state="readonly", font=("Segoe UI", 10))
         self.cb_destino.grid(row=3, column=2, sticky="ew", padx=8, pady=(0, 8))
 
-        firma_card = tk.Frame(sec, bg=COLORS["surface"], highlightthickness=1, highlightbackground=COLORS["border_soft"])
-        firma_card.grid(row=2, column=3, rowspan=2, sticky="nsew", padx=8, pady=(4, 8))
-        tk.Label(firma_card, text="Firma del usuario prestador", bg=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=8, pady=(8, 4))
-        self.lbl_firma = tk.Label(firma_card, bg=COLORS["surface"], fg=COLORS["text_muted"], font=("Segoe UI", 9, "italic"), text="Sin firma registrada")
-        self.lbl_firma.pack(fill="x", padx=8, pady=(0, 8))
-
         tk.Label(sec, text="Observación", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=4, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 2))
         self.txt_obs = tk.Text(sec, height=3, bg=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 10), relief="flat", bd=0, highlightthickness=1, highlightbackground=COLORS["border_soft"], highlightcolor=COLORS["primary"])
         self.txt_obs.grid(row=5, column=0, columnspan=4, sticky="ew", padx=8, pady=(0, 8))
 
+        firma_card = tk.Frame(sec, bg=COLORS["surface"], highlightthickness=1, highlightbackground=COLORS["border_soft"])
+        firma_card.grid(row=6, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 8))
+        tk.Label(firma_card, text="Firma del usuario prestador", bg=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=8, pady=(8, 4))
+        self.lbl_firma = tk.Label(firma_card, bg=COLORS["surface"], fg=COLORS["text_muted"], font=("Segoe UI", 9, "italic"), text="Sin firma registrada")
+        self.lbl_firma.pack(fill="x", padx=8, pady=(0, 8))
+
         bar = tk.Frame(sec, bg=COLORS["secondary"])
-        bar.grid(row=6, column=0, columnspan=4, sticky="ew", padx=8, pady=(0, 4))
+        bar.grid(row=7, column=0, columnspan=4, sticky="ew", padx=8, pady=(0, 4))
         self._button(bar, "Nuevo", "#6C757D", self._clear_form).pack(side="left")
         self._button(bar, "Registrar préstamo", COLORS["primary"], self._crear_prestamo).pack(side="right")
 
@@ -178,17 +183,38 @@ class PrestamosWindow(tk.Toplevel):
             padx=8,
             pady=8,
         )
-        sec.grid(row=1, column=1, sticky="nsew", padx=(5, 0))
-        sec.grid_rowconfigure(0, weight=1)
+        sec.grid(row=1, column=0, sticky="nsew")
+        sec.grid_rowconfigure(1, weight=1)
         sec.grid_columnconfigure(0, weight=1)
 
         top = tk.Frame(sec, bg=COLORS["secondary"])
         top.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        tk.Label(top, text="Mes:", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 4))
-        self.cb_mes_historial = ttk.Combobox(top, textvariable=self.v_mes_historial, values=[], state="readonly", width=10, font=("Segoe UI", 10))
+
+        _e_style = dict(font=("Segoe UI", 10), bg=COLORS["surface"], fg=COLORS["text_dark"],
+                        relief="flat", bd=0, highlightthickness=1,
+                        highlightbackground=COLORS["border_soft"], highlightcolor=COLORS["primary"])
+        def _lbl(t):
+            return tk.Label(top, text=t, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold"))
+
+        _lbl("Desde:").pack(side="left", padx=(0, 3))
+        self.w_hist_desde = make_date_widget(top)
+        self.w_hist_desde.pack(side="left", padx=(0, 10))
+        _lbl("Hasta:").pack(side="left", padx=(0, 3))
+        self.w_hist_hasta = make_date_widget(top)
+        self.w_hist_hasta.pack(side="left", padx=(0, 10))
+        _lbl("Código:").pack(side="left", padx=(0, 3))
+        tk.Entry(top, textvariable=self.v_hist_codigo, width=8, **_e_style).pack(side="left", padx=(0, 10))
+        _lbl("Lote:").pack(side="left", padx=(0, 3))
+        tk.Entry(top, textvariable=self.v_hist_lote, width=8, **_e_style).pack(side="left", padx=(0, 10))
+        _lbl("Destino:").pack(side="left", padx=(0, 3))
+        tk.Entry(top, textvariable=self.v_hist_destino, width=10, **_e_style).pack(side="left", padx=(0, 10))
+        _lbl("Estado:").pack(side="left", padx=(0, 3))
+        tk.Entry(top, textvariable=self.v_hist_estado, width=8, **_e_style).pack(side="left", padx=(0, 10))
+        _lbl("Mes:").pack(side="left", padx=(0, 3))
+        self.cb_mes_historial = ttk.Combobox(top, textvariable=self.v_mes_historial, values=[], state="readonly", width=9, font=("Segoe UI", 10))
         self.cb_mes_historial.pack(side="left", padx=(0, 6))
-        self._button(top, "Aplicar", COLORS["primary"], self._apply_month_filter).pack(side="left", padx=(0, 6))
-        self._button(top, "Todos", "#6C757D", self._clear_month_filter).pack(side="left")
+        self._button(top, "Filtrar", COLORS["primary_dark"], self._refresh_emitidos).pack(side="left", padx=(0, 6))
+        self._button(top, "Limpiar", "#6C757D", self._clear_emitidos_filters).pack(side="left")
 
         cols = ("id", "fecha", "codigo", "nombre", "lote", "cantidad", "destino", "estado")
         self.tree_emit = ttk.Treeview(sec, columns=cols, show="headings", height=11)
@@ -205,6 +231,7 @@ class PrestamosWindow(tk.Toplevel):
         ]:
             self.tree_emit.heading(key, text=title)
             self.tree_emit.column(key, width=width, anchor="center")
+        attach_treeview_sorting(self.tree_emit)
 
         ysb = ttk.Scrollbar(sec, orient="vertical", command=self.tree_emit.yview)
         self.tree_emit.configure(yscrollcommand=ysb.set)
@@ -219,7 +246,17 @@ class PrestamosWindow(tk.Toplevel):
         tk.Entry(parent, textvariable=var, state="readonly", readonlybackground=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 10), relief="flat", bd=0, highlightthickness=1, highlightbackground=COLORS["border_soft"], highlightcolor=COLORS["primary"]).grid(row=row + 1, column=col, sticky="ew", padx=8, pady=(0, 8))
 
     def _button(self, parent, text, bg, cmd):
-        return tk.Button(parent, text=text, command=cmd, bg=bg, fg="white", font=("Segoe UI", 9, "bold"), relief="flat", bd=0, cursor="hand2", padx=10, pady=5)
+        return tk.Button(parent, text=text, command=cmd, bg=bg, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", bd=0, cursor="hand2", padx=12, pady=6)
+
+    def _clear_date_widget(self, widget):
+        try:
+            widget.delete(0, "end")
+            return
+        except Exception:
+            pass
+        var = getattr(widget, "_fallback_var", None)
+        if var is not None:
+            var.set("")
 
     def _load_signature(self):
         firma_path = self._user.get("permisos", {}).get("firma_path", "") if isinstance(self._user.get("permisos", {}), dict) else ""
@@ -241,7 +278,6 @@ class PrestamosWindow(tk.Toplevel):
     def _refresh_all(self):
         self._refresh_codigos()
         self._refresh_destinos()
-        self._refresh_pendientes()
         self._refresh_meses_historial()
         self._refresh_emitidos()
 
@@ -261,6 +297,16 @@ class PrestamosWindow(tk.Toplevel):
 
     def _clear_month_filter(self):
         self.v_mes_historial.set("")
+        self._refresh_emitidos()
+
+    def _clear_emitidos_filters(self):
+        self.v_mes_historial.set("")
+        self._clear_date_widget(self.w_hist_desde)
+        self._clear_date_widget(self.w_hist_hasta)
+        self.v_hist_codigo.set("")
+        self.v_hist_lote.set("")
+        self.v_hist_destino.set("")
+        self.v_hist_estado.set("")
         self._refresh_emitidos()
 
     def _refresh_codigos(self):
@@ -501,6 +547,30 @@ class PrestamosWindow(tk.Toplevel):
             mes=mes,
             limit=None if mes else 15,
         )
+
+        fecha_q = ""
+        desde_q = get_date_value(self.w_hist_desde)
+        hasta_q = get_date_value(self.w_hist_hasta)
+        codigo_q = self.v_hist_codigo.get().strip().upper()
+        lote_q = self.v_hist_lote.get().strip().upper()
+        destino_q = self.v_hist_destino.get().strip().upper()
+        estado_q = self.v_hist_estado.get().strip().upper()
+
+        if fecha_q:
+            rows = [r for r in rows if str(r.get("fecha_prestamo", "")).strip() == fecha_q]
+        if desde_q:
+            rows = [r for r in rows if str(r.get("fecha_prestamo", "")).strip() >= desde_q]
+        if hasta_q:
+            rows = [r for r in rows if str(r.get("fecha_prestamo", "")).strip() <= hasta_q]
+        if codigo_q:
+            rows = [r for r in rows if codigo_q in str(r.get("codigo", "")).upper()]
+        if lote_q:
+            rows = [r for r in rows if lote_q in str(r.get("lote", "")).upper()]
+        if destino_q:
+            rows = [r for r in rows if destino_q in str(r.get("usuario_destino_nombre", "")).upper()]
+        if estado_q:
+            rows = [r for r in rows if estado_q in str(r.get("estado", "")).upper()]
+
         for r in rows:
             self.tree_emit.insert(
                 "",

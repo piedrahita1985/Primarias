@@ -2,10 +2,11 @@ import importlib
 import tkinter as tk
 from tkinter import messagebox
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
 
 from app_paths import resource_path
 from config.config import COLORS, PROJECT_NAME, WINDOW_HEIGHT, WINDOW_WIDTH
+from UI._mov_utils import apply_default_window
 
 MENU_IMAGE_PATH = resource_path("imagenes", "imagenmenu.jpg")
 LOGO_IMAGE_PATH = resource_path("imagenes", "imagencecif.png")
@@ -60,25 +61,11 @@ class MenuApp(tk.Toplevel):
 
 		self.title(f"{PROJECT_NAME} - Menu")
 		self.configure(bg=COLORS["secondary"])
-		self.resizable(True, True)
 
-		self._center_window()
+		apply_default_window(self, width=WINDOW_WIDTH, height=WINDOW_HEIGHT, min_width=1100, min_height=700)
 		self._build_ui()
-		self.minsize(1100, 700)
-		try:
-			self.state("zoomed")
-		except tk.TclError:
-			pass
 
 		self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-	def _center_window(self):
-		self.update_idletasks()
-		screen_w = self.winfo_screenwidth()
-		screen_h = self.winfo_screenheight()
-		x = (screen_w - WINDOW_WIDTH) // 2
-		y = (screen_h - WINDOW_HEIGHT) // 2
-		self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
 
 	def _build_ui(self):
 		self.grid_rowconfigure(0, weight=0)
@@ -124,6 +111,13 @@ class MenuApp(tk.Toplevel):
 			cursor="hand2",
 		).pack(side="left")
 
+		tk.Button(
+			user_wrap,
+			text="Salir",
+			command=self._on_close,
+			cursor="hand2",
+		).pack(side="left", padx=(6, 0))
+
 		content = tk.Frame(self, bg=COLORS["secondary"])
 		content.grid(row=1, column=0, sticky="nsew")
 		content.grid_rowconfigure(0, weight=0)
@@ -156,15 +150,17 @@ class MenuApp(tk.Toplevel):
 			justify="left",
 		).pack(anchor="w", pady=(4, 10))
 
-		nav_row = tk.Frame(header_left, bg=COLORS["surface"])
-		nav_row.pack(anchor="w", pady=(0, 2))
-		self._section_chip(nav_row, "Movimientos")
-		self._section_chip(nav_row, "Reportes")
-		self._section_chip(nav_row, "Maestras")
+		tk.Label(
+			header_left,
+			text="Movimientos  •  Reportes  •  Maestras",
+			bg=COLORS["surface"],
+			fg=COLORS["text_muted"],
+			font=("Segoe UI", 10, "bold"),
+		).pack(anchor="w", pady=(0, 2))
 
-		header_right = tk.Frame(hero_card.body, bg=COLORS["surface_alt"])
+		header_right = tk.Frame(hero_card.body, bg=COLORS["surface"])
 		header_right.grid(row=0, column=1, sticky="nsew", padx=(4, 18), pady=14)
-		self._load_image(header_right, MENU_IMAGE_PATH, "menu_banner", 420, 140, "Imagen")
+		self._load_image(header_right, MENU_IMAGE_PATH, "menu_banner", 500, 180, "Imagen")
 
 		self.mov_card = Card(content)
 		self.mov_card.grid(row=1, column=0, sticky="nsew", padx=(18, 10), pady=(0, 18))
@@ -176,10 +172,16 @@ class MenuApp(tk.Toplevel):
 
 	def _load_image(self, container, image_path, key, width, height, fallback_text):
 		try:
-			image = Image.open(image_path).resize((max(10, width), max(10, height)), Image.LANCZOS)
+			image = Image.open(image_path)
+			image = ImageOps.fit(
+				image,
+				(max(10, width), max(10, height)),
+				method=Image.LANCZOS,
+				centering=(0.5, 0.5),
+			)
 			photo = ImageTk.PhotoImage(image)
 			self._images[key] = photo
-			tk.Label(container, image=photo, bd=0, bg=container.cget("bg")).pack(fill="both", expand=True, padx=2, pady=2)
+			tk.Label(container, image=photo, bd=0, bg=container.cget("bg")).pack(fill="both", expand=True)
 		except Exception:
 			tk.Label(
 				container,
@@ -188,18 +190,6 @@ class MenuApp(tk.Toplevel):
 				fg=COLORS["text_dark"],
 				font=("Segoe UI", 14, "bold"),
 			).pack(fill="both", expand=True)
-
-	def _section_chip(self, parent, text):
-		chip = tk.Label(
-			parent,
-			text=text,
-			bg=COLORS["primary_soft"],
-			fg=COLORS["primary_dark"],
-			font=("Segoe UI", 9, "bold"),
-			padx=10,
-			pady=5,
-		)
-		chip.pack(side="left", padx=(0, 8))
 
 	def _action_card(self, parent, title, subtitle, command=None, enabled=True):
 		if enabled:
@@ -262,15 +252,14 @@ class MenuApp(tk.Toplevel):
 			lbl_sub.configure(bg=bg_card, fg=sub_fg)
 
 		# eventos hover
-		card.bind("<Enter>", on_enter)
-		card.bind("<Leave>", on_leave)
-		inner.bind("<Enter>", on_enter)
-		inner.bind("<Leave>", on_leave)
+		for widget in (card, inner, lbl_title, lbl_sub):
+			widget.bind("<Enter>", on_enter)
+			widget.bind("<Leave>", on_leave)
 
 		# click
 		if enabled and command is not None:
-			card.bind("<Button-1>", lambda e: command())
-			inner.bind("<Button-1>", lambda e: command())
+			for widget in (card, inner, lbl_title, lbl_sub):
+				widget.bind("<Button-1>", lambda e: command())
 
 		return card
 
@@ -307,6 +296,7 @@ class MenuApp(tk.Toplevel):
 			("Inventario", "Stock", "inventario", lambda: self._open_master_module("UI.inventario", "inventario")),
 			("Bitacora", "Auditoria", "bitacora", lambda: self._open_master_module("UI.bitacora", "bitacora")),
 			("Prestamos", "Gestión de préstamos", "prestamos", lambda: self._open_master_module("UI.prestamos", "prestamos")),
+			("Recibidos", "Recepción y devolución", "recibidos", lambda: self._open_master_module("UI.recibidos", "recibidos")),
 		]
 
 		for index, (title, subtitle, perm_key, command) in enumerate(actions):

@@ -3,7 +3,7 @@ from tkinter import messagebox
 from datetime import date
 from datetime import datetime
 
-from config.config import COLORS
+from config.config import COLORS, WINDOW_HEIGHT, WINDOW_WIDTH
 
 try:
     from tkcalendar import DateEntry
@@ -21,12 +21,50 @@ def upper_text_var(var: tk.StringVar):
 
 
 def only_numeric(event):
+    # Permite teclas de edición/navegación para no bloquear Backspace/Delete.
+    if event.keysym in {
+        "BackSpace",
+        "Delete",
+        "Left",
+        "Right",
+        "Home",
+        "End",
+        "Tab",
+        "Return",
+        "KP_Enter",
+    }:
+        return
+
     ch = event.char
     if ch == "":
         return
     if ch.isdigit() or ch == ".":
         return
     return "break"
+
+
+def attach_treeview_sorting(tree):
+    sort_state = {}
+
+    def _coerce(v):
+        txt = str(v or "").strip()
+        if txt == "":
+            return ""
+        try:
+            return float(txt.replace(",", "."))
+        except ValueError:
+            return txt.upper()
+
+    def _sort_by(col):
+        reverse = sort_state.get(col, False)
+        items = [(tree.set(k, col), k) for k in tree.get_children("")]
+        items.sort(key=lambda x: _coerce(x[0]), reverse=reverse)
+        for idx, (_, k) in enumerate(items):
+            tree.move(k, "", idx)
+        sort_state[col] = not reverse
+
+    for col in tree["columns"]:
+        tree.heading(col, command=lambda c=col: _sort_by(c))
 
 
 def only_letters(event):
@@ -49,6 +87,24 @@ def draw_title(window, text):
         fg="white",
         font=("Segoe UI", 15, "bold"),
     ).pack(expand=True)
+
+
+def apply_default_window(window, width=WINDOW_WIDTH, height=WINDOW_HEIGHT, min_width=1040, min_height=640):
+    window.update_idletasks()
+    screen_w = window.winfo_screenwidth()
+    screen_h = window.winfo_screenheight()
+
+    # Ajusta el tamaño inicial para que siempre quede visible el borde inferior.
+    max_w = max(screen_w - 80, 800)
+    max_h = max(screen_h - 120, 520)
+    fit_w = min(width, max_w)
+    fit_h = min(height, max_h)
+
+    x = max((screen_w - fit_w) // 2, 0)
+    y = max((screen_h - fit_h) // 2, 0)
+    window.geometry(f"{fit_w}x{fit_h}+{x}+{y}")
+    window.minsize(min(min_width, max_w), min(min_height, max_h))
+    window.resizable(True, True)
 
 
 def make_labeled_entry(parent, label, var, row, col, width=22, read_only=False):
@@ -141,6 +197,41 @@ def get_date_value(widget):
     if var is not None:
         return var.get().strip()
     return ""
+
+
+def make_date_widget(parent):
+    """Widget de fecha sin etiqueta, para usar inline con pack."""
+    if DateEntry is not None:
+        widget = DateEntry(
+            parent,
+            date_pattern="yyyy-mm-dd",
+            width=12,
+            background=COLORS["primary"],
+            foreground="white",
+            borderwidth=0,
+            font=("Segoe UI", 10),
+        )
+        try:
+            widget.delete(0, "end")
+        except Exception:
+            pass
+    else:
+        val = tk.StringVar()
+        widget = tk.Entry(
+            parent,
+            textvariable=val,
+            bg=COLORS["surface"],
+            fg=COLORS["text_dark"],
+            font=("Segoe UI", 10),
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["border_soft"],
+            highlightcolor=COLORS["primary"],
+            width=14,
+        )
+        widget._fallback_var = val  # type: ignore[attr-defined]
+    return widget
 
 
 def validate_today_or_future(date_text, parent=None, field_name="Fecha"):

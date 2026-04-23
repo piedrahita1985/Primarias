@@ -17,6 +17,7 @@ _PERMISOS_MENU = [
     ("inventario", "Inventario"),
     ("bitacora", "Bitácora"),
     ("prestamos", "Préstamos"),
+    ("recibidos", "Recibidos"),
     ("sustancias", "Sustancias"),
     ("tipos_entrada", "Tipos entrada"),
     ("tipos_salida", "Tipos salida"),
@@ -34,6 +35,7 @@ _PERMISOS_MOVIMIENTOS = [
     ("inventario", "Inventario"),
     ("bitacora", "Bitácora"),
     ("prestamos", "Préstamos"),
+    ("recibidos", "Recibidos"),
 ]
 
 _PERMISOS_MAESTRAS = [
@@ -59,6 +61,9 @@ class UsuariosWindow(MaestraBase):
     WINDOW_SIZE = "1050x580"
     LIST_TITLE = "Usuarios registrados"
     DETAIL_TITLE = "Detalle del usuario"
+    SHOW_UPDATE_BUTTON = False
+    DIRECT_SAVE_ON_SELECTION = True
+    CONFIRM_DIRECT_SAVE_MESSAGE = "¿Desea guardar los cambios del usuario seleccionado?"
 
     # ── Construccion del formulario ──────────────────────
 
@@ -76,6 +81,7 @@ class UsuariosWindow(MaestraBase):
             "inventario": tk.BooleanVar(value=True),
             "bitacora": tk.BooleanVar(value=True),
             "prestamos": tk.BooleanVar(value=True),
+            "recibidos": tk.BooleanVar(value=True),
             "sustancias": tk.BooleanVar(value=True),
             "tipos_entrada": tk.BooleanVar(value=True),
             "tipos_salida": tk.BooleanVar(value=True),

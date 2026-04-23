@@ -21,5 +21,19 @@
   {"id": 20, "fecha_hora": "2026-04-22 15:36:19", "usuario": "pruebap", "tipo_operacion": "SALIDAS-CREAR", "id_registro": 7, "campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"},
   {"id": 21, "fecha_hora": "2026-04-22 15:36:19", "usuario": "pruebap", "tipo_operacion": "SALIDAS-CREAR", "id_registro": 7, "campo": "cantidad", "valor_anterior": "0", "valor_nuevo": "1.0"},
   {"id": 22, "fecha_hora": "2026-04-22 15:36:19", "usuario": "pruebap", "tipo_operacion": "SALIDAS-CREAR", "id_registro": 7, "campo": "id_entrada", "valor_anterior": "", "valor_nuevo": "2"},
-  {"id": 23, "fecha_hora": "2026-04-22 15:36:19", "usuario": "pruebap", "tipo_operacion": "PRESTAMO-RESPUESTA", "id_registro": 3, "campo": "estado", "valor_anterior": "PENDIENTE", "valor_nuevo": "ACEPTADO"}
+  {"id": 23, "fecha_hora": "2026-04-22 15:36:19", "usuario": "pruebap", "tipo_operacion": "PRESTAMO-RESPUESTA", "id_registro": 3, "campo": "estado", "valor_anterior": "PENDIENTE", "valor_nuevo": "ACEPTADO"},
+  {"id": 24, "fecha_hora": "2026-04-22 20:00:01", "usuario": "admin", "tipo_operacion": "PRESTAMO-CREAR", "id_registro": 4, "campo": "estado", "valor_anterior": "", "valor_nuevo": "PENDIENTE"},
+  {"id": 25, "fecha_hora": "2026-04-22 20:03:07", "usuario": "pruebap", "tipo_operacion": "SALIDAS-CREAR", "id_registro": 8, "campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"},
+  {"id": 26, "fecha_hora": "2026-04-22 20:03:07", "usuario": "pruebap", "tipo_operacion": "SALIDAS-CREAR", "id_registro": 8, "campo": "cantidad", "valor_anterior": "0", "valor_nuevo": "9.0"},
+  {"id": 27, "fecha_hora": "2026-04-22 20:03:07", "usuario": "pruebap", "tipo_operacion": "SALIDAS-CREAR", "id_registro": 8, "campo": "id_entrada", "valor_anterior": "", "valor_nuevo": "2"},
+  {"id": 28, "fecha_hora": "2026-04-22 20:03:07", "usuario": "pruebap", "tipo_operacion": "PRESTAMO-RESPUESTA", "id_registro": 4, "campo": "estado", "valor_anterior": "PENDIENTE", "valor_nuevo": "RECIBIDO"},
+  {"id": 29, "fecha_hora": "2026-04-22 20:04:51", "usuario": "pruebap", "tipo_operacion": "PRESTAMO-DEVOLUCION", "id_registro": 4, "campo": "estado", "valor_anterior": "RECIBIDO", "valor_nuevo": "DEVUELTO"},
+  {"id": 30, "fecha_hora": "2026-04-22 20:04:51", "usuario": "pruebap", "tipo_operacion": "PRESTAMO-DEVOLUCION", "id_registro": 4, "campo": "cantidad_entrada", "valor_anterior": "15.0", "valor_nuevo": "24.0"},
+  {"id": 31, "fecha_hora": "2026-04-22 20:09:20", "usuario": "admin", "tipo_operacion": "PRESTAMO-CREAR", "id_registro": 1, "campo": "estado", "valor_anterior": "", "valor_nuevo": "PENDIENTE"},
+  {"id": 32, "fecha_hora": "2026-04-22 20:09:46", "usuario": "pruebap", "tipo_operacion": "SALIDAS-CREAR", "id_registro": 9, "campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"},
+  {"id": 33, "fecha_hora": "2026-04-22 20:09:46", "usuario": "pruebap", "tipo_operacion": "SALIDAS-CREAR", "id_registro": 9, "campo": "cantidad", "valor_anterior": "0", "valor_nuevo": "10.2"},
+  {"id": 34, "fecha_hora": "2026-04-22 20:09:46", "usuario": "pruebap", "tipo_operacion": "SALIDAS-CREAR", "id_registro": 9, "campo": "id_entrada", "valor_anterior": "", "valor_nuevo": "2"},
+  {"id": 35, "fecha_hora": "2026-04-22 20:09:46", "usuario": "pruebap", "tipo_operacion": "PRESTAMO-RESPUESTA", "id_registro": 1, "campo": "estado", "valor_anterior": "PENDIENTE", "valor_nuevo": "RECIBIDO"},
+  {"id": 36, "fecha_hora": "2026-04-22 20:09:58", "usuario": "pruebap", "tipo_operacion": "PRESTAMO-DEVOLUCION", "id_registro": 1, "campo": "estado", "valor_anterior": "RECIBIDO", "valor_nuevo": "DEVUELTO"},
+  {"id": 37, "fecha_hora": "2026-04-22 20:09:58", "usuario": "pruebap", "tipo_operacion": "PRESTAMO-DEVOLUCION", "id_registro": 1, "campo": "cantidad_entrada", "valor_anterior": "24.0", "valor_nuevo": "34.2"}
 ] }

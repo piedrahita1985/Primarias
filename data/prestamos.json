@@ -1,5 +1,3 @@
 { "prestamos": [
-  {"id": 1, "fecha_creacion": "2026-04-14 20:27:30", "fecha_prestamo": "2026-04-14", "id_sustancia": 10, "id_entrada": 1, "id_unidad": 3, "cantidad": 10.0, "id_usuario_presta": 1, "id_usuario_destino": 2, "firma_presta_path": "C:\\Users\\adolfoPM\\OneDrive - Caja de Compensacion Familiar de Antioquia COMFAMA\\Escritorio\\Primarias\\firmas\\Adolfo.png", "observacion": "para pruebas", "estado": "ACEPTADO", "fecha_respuesta": "2026-04-14 20:28:15", "id_usuario_recibe": 2},
-  {"id": 2, "fecha_creacion": "2026-04-14 20:36:49", "fecha_prestamo": "2026-04-14", "id_sustancia": 1, "id_entrada": 2, "id_unidad": 1, "cantidad": 2.0, "id_usuario_presta": 1, "id_usuario_destino": 2, "firma_presta_path": "qa-firma", "observacion": "OBSERVACION DE PRESTAMO CON ESPACIOS", "estado": "ACEPTADO", "fecha_respuesta": "2026-04-14 20:36:49", "id_usuario_recibe": 2},
-  {"id": 3, "fecha_creacion": "2026-04-22 15:35:36", "fecha_prestamo": "2026-04-22", "id_sustancia": 1, "id_entrada": 2, "id_unidad": 1, "cantidad": 1.0, "id_usuario_presta": 1, "id_usuario_destino": 2, "firma_presta_path": "C:\\Users\\adolfoPM\\OneDrive - Caja de Compensacion Familiar de Antioquia COMFAMA\\Escritorio\\Primarias\\firmas\\1769020045314.jpg", "observacion": "DGBHFGHFGHFHGFHFGHGFHFG", "estado": "ACEPTADO", "fecha_respuesta": "2026-04-22 15:36:19", "id_usuario_recibe": 2}
+  
 ] }

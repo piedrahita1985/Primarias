@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from config.config import COLORS
+from UI._mov_utils import apply_default_window
 
 
 class MaestraBase(tk.Toplevel):
@@ -30,6 +31,9 @@ class MaestraBase(tk.Toplevel):
     LIST_TITLE = "Registros"
     DETAIL_TITLE = "Detalle"
     _MSG_SIN_SELECCION = "Seleccione un registro de la lista."
+    SHOW_UPDATE_BUTTON = True
+    DIRECT_SAVE_ON_SELECTION = False
+    CONFIRM_DIRECT_SAVE_MESSAGE = "¿Desea guardar los cambios de este registro?"
 
     def __init__(self, master):
         super().__init__(master)
@@ -41,9 +45,7 @@ class MaestraBase(tk.Toplevel):
 
         self.wm_title(self.TITLE)
         self.configure(bg=COLORS["secondary"])
-        self.geometry(self.WINDOW_SIZE)
-        self.minsize(900, 550)
-        self.resizable(True, True)
+        apply_default_window(self)
 
         self._build_ui()
         self._update_estado_color()
@@ -133,7 +135,8 @@ class MaestraBase(tk.Toplevel):
         btn_bar.pack(fill="x", padx=14, pady=10)
 
         _btn(btn_bar, "Nuevo",       "#6C757D",        self._accion_nuevo).pack(side="left", padx=(0, 6))
-        _btn(btn_bar, "Actualizar",  COLORS["primary"], self._accion_actualizar).pack(side="left", padx=(0, 6))
+        if self.SHOW_UPDATE_BUTTON:
+            _btn(btn_bar, "Actualizar", COLORS["primary"], self._accion_actualizar).pack(side="left", padx=(0, 6))
         _btn(btn_bar, "Habilitar",   COLORS["success"], self._accion_habilitar).pack(side="left", padx=(0, 6))
         _btn(btn_bar, "Inhabilitar", COLORS["error"],   self._accion_inhabilitar).pack(side="left")
 
@@ -182,6 +185,8 @@ class MaestraBase(tk.Toplevel):
         self._set_form_data(r)
         self._var_estado.set(r.get("estado", "HABILITADA"))
         self._update_estado_color()
+        if self.DIRECT_SAVE_ON_SELECTION:
+            self._modo = "actualizar"
 
     def _accion_nuevo(self):
         self._seleccionado_id = None
@@ -223,6 +228,9 @@ class MaestraBase(tk.Toplevel):
         self._cargar_lista()
 
     def _accion_guardar(self):
+        if self.DIRECT_SAVE_ON_SELECTION and self._seleccionado_id is not None and self._modo == "ver":
+            self._modo = "actualizar"
+
         if self._modo not in ("nuevo", "actualizar"):
             messagebox.showwarning(
                 "Aviso",
@@ -240,6 +248,12 @@ class MaestraBase(tk.Toplevel):
             self._logica.agregar(self._registros, datos)
             messagebox.showinfo("Exito", "Registro guardado correctamente.", parent=self)
         else:
+            if self.DIRECT_SAVE_ON_SELECTION and not messagebox.askyesno(
+                "Confirmar",
+                self.CONFIRM_DIRECT_SAVE_MESSAGE,
+                parent=self,
+            ):
+                return
             self._logica.actualizar(self._registros, self._seleccionado_id, datos)
             messagebox.showinfo("Exito", "Registro actualizado correctamente.", parent=self)
 

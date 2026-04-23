@@ -3,7 +3,7 @@ from tkinter import ttk
 
 from config.config import COLORS
 from logica import inventario_mov_logica as inv
-from UI._mov_utils import draw_title
+from UI._mov_utils import apply_default_window, attach_treeview_sorting, draw_title
 
 
 COLUMNS = [
@@ -43,8 +43,7 @@ class InventarioWindow(tk.Toplevel):
         super().__init__(master)
         self.title("Sistema de Gestion - Inventario")
         self.configure(bg=COLORS["secondary"])
-        self.geometry("1440x820")
-        self.minsize(1100, 700)
+        apply_default_window(self, min_width=1100, min_height=700)
         self._tooltip = None
 
         draw_title(self, "Sistema de Gestion - Inventario")
@@ -88,6 +87,7 @@ class InventarioWindow(tk.Toplevel):
         for key, title, width in COLUMNS:
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, anchor="center")
+        attach_treeview_sorting(self.tree)
 
         self.tree.tag_configure("vencido", background="#FFD6D6")
         self.tree.tag_configure("proximo", background="#FFF3CD")

@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 from app_paths import resource_path
 from config.config import COLORS, PROJECT_NAME, WINDOW_HEIGHT, WINDOW_WIDTH
 from logica import usuarios_logica as usr
+from UI._mov_utils import apply_default_window
 
 IMAGE_PATH = resource_path("imagenes", "imagenlogin.jpg")
 
@@ -29,17 +30,8 @@ class LoginApp(tk.Tk):
 		self._entry_usuario = None
 		self._entry_password = None
 
-		self._center_window()
+		apply_default_window(self, width=WINDOW_WIDTH, height=WINDOW_HEIGHT, min_width=1040, min_height=640)
 		self._build_ui()
-		self.minsize(1040, 640)
-
-	def _center_window(self):
-		self.update_idletasks()
-		screen_w = self.winfo_screenwidth()
-		screen_h = self.winfo_screenheight()
-		x = (screen_w - WINDOW_WIDTH) // 2
-		y = (screen_h - WINDOW_HEIGHT) // 2
-		self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
 
 	def _build_ui(self):
 		self.grid_rowconfigure(0, weight=1)

@@ -4,7 +4,7 @@ from tkinter import messagebox, ttk
 from config.config import COLORS
 from logica import movimientos_common as common
 from logica import salidas_mov_logica as sal
-from UI._mov_utils import draw_title, get_date_value, make_date_input, make_labeled_entry, only_numeric, upper_text_var
+from UI._mov_utils import attach_treeview_sorting, apply_default_window, draw_title, get_date_value, make_date_input, make_date_widget, make_labeled_entry, only_numeric, upper_text_var
 
 
 def open_window(master):
@@ -17,8 +17,7 @@ class SalidasWindow(tk.Toplevel):
         self.username = getattr(master, "username", "SISTEMA")
         self.title("Sistema de Gestion - Salidas")
         self.configure(bg=COLORS["secondary"])
-        self.geometry("1320x860")
-        self.minsize(1100, 700)
+        apply_default_window(self, min_width=1100, min_height=700)
 
         self._maestras = common.cargar_maestras()
         self._sustancias_by_codigo = common.map_sustancia_by_codigo(self._maestras["sustancias"])
@@ -55,9 +54,6 @@ class SalidasWindow(tk.Toplevel):
         self.v_unidad = tk.StringVar()
         self.v_cantidad = tk.StringVar()
         self.v_actividad = tk.StringVar()
-        self.h_fecha = tk.StringVar()
-        self.h_desde = tk.StringVar()
-        self.h_hasta = tk.StringVar()
         self.h_codigo = tk.StringVar()
         self.h_lote = tk.StringVar()
 
@@ -123,32 +119,44 @@ class SalidasWindow(tk.Toplevel):
         self.txt_obs.bind("<KeyRelease>", self._on_obs_upper)
 
         self._build_history()
+        self._rebuild_codigos_disponibles()
 
         bar = tk.Frame(self, bg=COLORS["secondary"])
-        bar.pack(fill="x", padx=10, pady=(0, 10))
-        self._button(bar, "Nuevo", "#6C757D", self._clear_form).pack(side="left", padx=(0, 6))
-        self._button(bar, "Guardar", COLORS["primary"], self._save).pack(side="right", padx=6)
+        bar.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+        self.lbl_status = tk.Label(
+            bar,
+            text="Listo para registrar salida.",
+            bg=COLORS["secondary"],
+            fg=COLORS["text_muted"],
+            font=("Segoe UI", 9),
+            anchor="w",
+        )
+        self.lbl_status.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self._button(bar, "Salir", "#6C757D", self.destroy).pack(side="right")
-
-        self._rebuild_codigos_disponibles()
+        self._button(bar, "Guardar", COLORS["primary"], self._save).pack(side="right", padx=(0, 6))
+        self._button(bar, "Nuevo", "#6C757D", self._clear_form).pack(side="left", padx=(0, 6))
 
     def _build_history(self):
         hist = tk.LabelFrame(self, text="  Historial de Salidas  ", bg=COLORS["secondary"], fg=COLORS["primary_dark"], font=("Segoe UI", 10, "bold"))
         hist.pack(fill="both", expand=False, padx=10, pady=(0, 8))
 
         ftop = tk.Frame(hist, bg=COLORS["secondary"])
-        ftop.pack(fill="x", padx=6, pady=6)
-
-        tk.Label(ftop, text="Fecha:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_fecha, width=12).pack(side="left", padx=(0, 10))
-        tk.Label(ftop, text="Desde:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_desde, width=12).pack(side="left", padx=(0, 10))
-        tk.Label(ftop, text="Hasta:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_hasta, width=12).pack(side="left", padx=(0, 10))
-        tk.Label(ftop, text="Codigo:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_codigo, width=12).pack(side="left", padx=(0, 10))
-        tk.Label(ftop, text="Lote:", bg=COLORS["secondary"], font=("Segoe UI", 10)).pack(side="left", padx=(0, 4))
-        tk.Entry(ftop, textvariable=self.h_lote, width=12).pack(side="left", padx=(0, 10))
+        ftop.pack(fill="x", padx=6, pady=(6, 4))
+        _e_style = dict(bg=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 10),
+                        relief="flat", bd=0, highlightthickness=1,
+                        highlightbackground=COLORS["border_soft"], highlightcolor=COLORS["primary"])
+        def _lbl(t):
+            return tk.Label(ftop, text=t, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold"))
+        _lbl("Desde:").pack(side="left", padx=(0, 3))
+        self.h_w_desde = make_date_widget(ftop)
+        self.h_w_desde.pack(side="left", padx=(0, 10))
+        _lbl("Hasta:").pack(side="left", padx=(0, 3))
+        self.h_w_hasta = make_date_widget(ftop)
+        self.h_w_hasta.pack(side="left", padx=(0, 10))
+        _lbl("Codigo:").pack(side="left", padx=(0, 3))
+        tk.Entry(ftop, textvariable=self.h_codigo, width=10, **_e_style).pack(side="left", padx=(0, 10))
+        _lbl("Lote:").pack(side="left", padx=(0, 3))
+        tk.Entry(ftop, textvariable=self.h_lote, width=10, **_e_style).pack(side="left", padx=(0, 10))
         self._button(ftop, "Filtrar", COLORS["primary"], self._apply_filters).pack(side="left", padx=(0, 6))
         self._button(ftop, "Borrar filtros", "#B0B0B0", self._clear_filters).pack(side="left")
 
@@ -166,6 +174,7 @@ class SalidasWindow(tk.Toplevel):
         ]:
             self.h_tree.heading(key, text=title)
             self.h_tree.column(key, width=width, anchor="center")
+        attach_treeview_sorting(self.h_tree)
         self.h_tree.pack(fill="both", expand=True, padx=6)
 
         ysb = ttk.Scrollbar(hist, orient="vertical", command=self.h_tree.yview)
@@ -181,18 +190,30 @@ class SalidasWindow(tk.Toplevel):
     def _button(self, parent, text, bg, cmd):
         return tk.Button(parent, text=text, bg=bg, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", bd=0, padx=10, pady=6, cursor="hand2", command=cmd)
 
+    def _set_status(self, text, is_error=False):
+        if hasattr(self, "lbl_status"):
+            self.lbl_status.configure(
+                text=text,
+                fg=COLORS["error"] if is_error else COLORS["text_muted"],
+            )
+
+    def _warn(self, text):
+        self._set_status(text, is_error=True)
+        messagebox.showwarning("Aviso", text, parent=self)
+
     def _set_date_widget(self, widget, value):
-        if not value:
-            return
         if hasattr(widget, "set_date"):
             try:
-                widget.set_date(value)
+                if value:
+                    widget.set_date(value)
+                else:
+                    widget.delete(0, "end")
                 return
             except Exception:
                 pass
         var = getattr(widget, "_fallback_var", None)
         if var is not None:
-            var.set(value)
+            var.set(value or "")
 
     def _on_obs_upper(self, _event=None):
         value = self.txt_obs.get("1.0", "end-1c")
@@ -350,38 +371,38 @@ class SalidasWindow(tk.Toplevel):
 
     def _save(self):
         if self._current_sustancia is None:
-            messagebox.showwarning("Aviso", "Seleccione un codigo de uso valido.", parent=self)
+            self._warn("Seleccione un codigo de uso valido.")
             return
 
         lote_idx = self.cb_lote.current()
         if lote_idx < 0 or lote_idx >= len(self._lotes):
-            messagebox.showwarning("Aviso", "Seleccione un lote valido.", parent=self)
+            self._warn("Seleccione un lote valido.")
             return
 
         try:
             cantidad = float((self.v_cantidad.get() or "0").replace(",", "."))
         except ValueError:
-            messagebox.showwarning("Aviso", "Cantidad invalida.", parent=self)
+            self._warn("Cantidad invalida.")
             return
 
         if cantidad <= 0:
-            messagebox.showwarning("Aviso", "La cantidad debe ser mayor a 0.", parent=self)
+            self._warn("La cantidad debe ser mayor a 0.")
             return
 
         lote_sel = self._lotes[lote_idx]
         disponible = self._available_for_selected_lote(lote_sel)
 
         if disponible <= 0:
-            messagebox.showwarning("Aviso", "No hay stock disponible para el lote seleccionado.", parent=self)
+            self._warn("No hay stock disponible para el lote seleccionado.")
             return
 
         if cantidad > disponible:
-            messagebox.showwarning("Aviso", f"Stock insuficiente. Disponible: {disponible}", parent=self)
+            self._warn(f"Stock insuficiente. Disponible: {disponible}")
             return
 
         nuevo_stock = disponible - cantidad
         if nuevo_stock < 0:
-            messagebox.showwarning("Aviso", "La salida no puede dejar stock negativo.", parent=self)
+            self._warn("La salida no puede dejar stock negativo.")
             return
 
         tipo_salida_id = None
@@ -390,7 +411,7 @@ class SalidasWindow(tk.Toplevel):
                 tipo_salida_id = t.get("id")
                 break
         if tipo_salida_id is None:
-            messagebox.showwarning("Aviso", "Seleccione un tipo de salida valido.", parent=self)
+            self._warn("Seleccione un tipo de salida valido.")
             return
 
         record = {
@@ -406,9 +427,11 @@ class SalidasWindow(tk.Toplevel):
 
         if self._editing_id is None:
             sal.agregar(record, usuario=self.username)
+            self._set_status("Salida guardada correctamente.")
             messagebox.showinfo("Exito", "Salida guardada correctamente.", parent=self)
         else:
             sal.actualizar(self._editing_id, record, usuario=self.username)
+            self._set_status("Salida actualizada correctamente.")
             messagebox.showinfo("Exito", "Salida actualizada correctamente.", parent=self)
 
         self._refresh_list()
@@ -437,6 +460,7 @@ class SalidasWindow(tk.Toplevel):
         self._lotes = []
         self._current_sustancia = None
         self._rebuild_codigos_disponibles()
+        self._set_status("Listo para registrar salida.")
 
     def _refresh_list(self):
         self._rebuild_codigos_disponibles()
@@ -447,9 +471,9 @@ class SalidasWindow(tk.Toplevel):
 
     def _apply_filters(self):
         rows = sal.filtrar(
-            fecha=self.h_fecha.get().strip(),
-            fecha_desde=self.h_desde.get().strip(),
-            fecha_hasta=self.h_hasta.get().strip(),
+            fecha="",
+            fecha_desde=get_date_value(self.h_w_desde),
+            fecha_hasta=get_date_value(self.h_w_hasta),
             codigo=self.h_codigo.get().strip(),
             lote=self.h_lote.get().strip(),
             maestras=self._maestras,
@@ -457,9 +481,8 @@ class SalidasWindow(tk.Toplevel):
         self._fill_history(rows)
 
     def _clear_filters(self):
-        self.h_fecha.set("")
-        self.h_desde.set("")
-        self.h_hasta.set("")
+        self._set_date_widget(self.h_w_desde, "")
+        self._set_date_widget(self.h_w_hasta, "")
         self.h_codigo.set("")
         self.h_lote.set("")
         self._load_history_default()
