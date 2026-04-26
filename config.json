@@ -1,0 +1,14 @@
+{
+    "motor": "sqlite",
+    "sqlite": {
+        "path": "data/kardex.db"
+    },
+    "sqlserver": {
+        "server": "NOMBRE_SERVIDOR\\INSTANCIA",
+        "database": "KardexReactivos",
+        "driver": "ODBC Driver 17 for SQL Server",
+        "trusted_connection": true,
+        "username": "",
+        "password": ""
+    }
+}

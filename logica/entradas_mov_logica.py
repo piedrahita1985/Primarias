@@ -1,6 +1,6 @@
+from database import get_db
 from logica import movimientos_common as common
 from logica import bitacora_logica as bit
-from logica import inventario_mov_logica as inv
 
 
 def _normalize_text(value):
@@ -23,89 +23,90 @@ def cargar():
 
 
 def agregar(record, usuario="SISTEMA"):
-    rows = cargar()
-    nuevo = {"id": common.next_id(rows), "estado": "ACTIVA", **_normalize_record_fields(record)}
-    rows.append(nuevo)
-    common.guardar_entradas(rows)
-    inv.guardar_snapshot()
-    bit.registrar_campos(
-        tipo_operacion="ENTRADAS-CREAR",
-        id_registro=nuevo.get("id"),
-        usuario=usuario,
-        cambios=[{"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"}],
-    )
-    return nuevo
+    record = _normalize_record_fields(record)
+    db = get_db()
+    try:
+        nuevo_id = db.crear_inventario(record)
+        bit.registrar_campos(
+            tipo_operacion="ENTRADAS-CREAR",
+            id_registro=nuevo_id,
+            usuario=usuario,
+            cambios=[{"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "CREADO"}],
+        )
+        return {**record, "id": nuevo_id, "estado": "ACTIVA"}
+    finally:
+        db.close()
 
 
 def actualizar(id_entrada, cambios, usuario="SISTEMA"):
     cambios = _normalize_record_fields(cambios)
-    rows = cargar()
-    old = None
-    updated = None
-    for r in rows:
-        if r.get("id") == id_entrada:
-            old = dict(r)
-            r.update(cambios)
-            updated = dict(r)
-            break
-    common.guardar_entradas(rows)
-    inv.guardar_snapshot()
-    cambios_log = []
-    if old is not None and updated is not None:
-        keys = sorted(set(old.keys()) | set(updated.keys()))
-        for k in keys:
-            old_v = old.get(k)
-            new_v = updated.get(k)
-            if str(old_v) != str(new_v):
-                cambios_log.append({"campo": k, "valor_anterior": old_v, "valor_nuevo": new_v})
-    bit.registrar_campos("ENTRADAS-EDITAR", id_entrada, usuario=usuario, cambios=cambios_log)
+    db = get_db()
+    try:
+        rows = db.get_inventario()
+        old = next((r for r in rows if r.get("id") == id_entrada), None)
+        db.actualizar_inventario(id_entrada, cambios)
+        updated = {**(old or {}), **cambios}
+        cambios_log = []
+        if old:
+            for k in sorted(set(old.keys()) | set(cambios.keys())):
+                ov = old.get(k)
+                nv = cambios.get(k, ov)
+                if str(ov) != str(nv):
+                    cambios_log.append({"campo": k, "valor_anterior": ov, "valor_nuevo": nv})
+        bit.registrar_campos("ENTRADAS-EDITAR", id_entrada, usuario=usuario, cambios=cambios_log)
+    finally:
+        db.close()
 
 
 def anular(id_entrada, usuario="SISTEMA"):
-    entradas = cargar()
-    salidas = common.cargar_salidas()
-
-    for e in entradas:
-        if e.get("id") == id_entrada:
-            e["estado"] = "ANULADA"
-            break
-
-    # Si se anula la entrada, se anulan salidas asociadas para consistencia kardex.
-    for s in salidas:
-        if s.get("id_entrada") == id_entrada:
-            s["estado"] = "ANULADA"
-
-    common.guardar_entradas(entradas)
-    common.guardar_salidas(salidas)
-    inv.guardar_snapshot()
-    bit.registrar_campos(
-        "ENTRADAS-ANULAR",
-        id_entrada,
-        usuario=usuario,
-        cambios=[
-            {"campo": "estado", "valor_anterior": "ACTIVA", "valor_nuevo": "ANULADA"},
-            {"campo": "salidas_asociadas", "valor_anterior": "ACTIVAS", "valor_nuevo": "ANULADAS"},
-        ],
-    )
+    db = get_db()
+    try:
+        db.anular_inventario(id_entrada)
+        # Anular salidas asociadas
+        salidas = db.get_salidas()
+        for s in salidas:
+            if s.get("id_inventario") == id_entrada or s.get("id_entrada") == id_entrada:
+                if s.get("estado", "ACTIVA") == "ACTIVA":
+                    db.anular_salida(s["id"])
+        bit.registrar_campos(
+            "ENTRADAS-ANULAR",
+            id_entrada,
+            usuario=usuario,
+            cambios=[
+                {"campo": "estado", "valor_anterior": "ACTIVA", "valor_nuevo": "ANULADA"},
+                {"campo": "salidas_asociadas", "valor_anterior": "ACTIVAS", "valor_nuevo": "ANULADAS"},
+            ],
+        )
+    finally:
+        db.close()
 
 
 def ultimas_15(maestras):
-    rows = sorted(cargar(), key=lambda x: x.get("id", 0), reverse=True)[:15]
+    db = get_db()
+    try:
+        rows = db.get_inventario()
+    finally:
+        db.close()
+    rows = sorted(rows, key=lambda x: x.get("id", 0), reverse=True)[:15]
     return enriquecer(rows, maestras)
 
 
 def filtrar(fecha="", fecha_desde="", fecha_hasta="", codigo="", lote="", maestras=None):
     maestras = maestras or common.cargar_maestras()
-    rows = cargar()
-    sust_by_id = common.map_by_id(maestras["sustancias"])
+    db = get_db()
+    try:
+        rows = db.get_inventario()
+    finally:
+        db.close()
 
-    out = []
+    sust_by_id = common.map_by_id(maestras["sustancias"])
     codigo = str(codigo).strip()
     lote = str(lote).strip().upper()
     fecha = str(fecha).strip()
     fecha_desde = str(fecha_desde).strip()
     fecha_hasta = str(fecha_hasta).strip()
 
+    out = []
     for e in rows:
         sust = sust_by_id.get(e.get("id_sustancia"), {})
         c = str(sust.get("codigo", ""))
@@ -136,19 +137,23 @@ def enriquecer(rows, maestras):
         u = uni_by_id.get(e.get("id_unidad"), {})
         out.append({
             **e,
-            "codigo": s.get("codigo", ""),
-            "nombre": s.get("nombre", ""),
-            "unidad_nombre": u.get("unidad", ""),
+            "codigo": e.get("codigo") or s.get("codigo", ""),
+            "nombre": e.get("nombre") or s.get("nombre", ""),
+            "unidad_nombre": e.get("unidad") or u.get("unidad", ""),
         })
     return out
 
 
 def total_salidas_activas(id_entrada):
-    salidas = common.cargar_salidas()
+    db = get_db()
+    try:
+        salidas = db.get_salidas()
+    finally:
+        db.close()
     total = 0.0
     for s in salidas:
         if s.get("estado", "ACTIVA") != "ACTIVA":
             continue
-        if s.get("id_entrada") == id_entrada:
+        if s.get("id_inventario") == id_entrada or s.get("id_entrada") == id_entrada:
             total += common.to_float(s.get("cantidad"))
     return total

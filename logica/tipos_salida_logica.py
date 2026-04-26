@@ -1,52 +1,59 @@
-import json
-
-from app_paths import resource_path
-
-_DATA_PATH = resource_path("data", "tipo_salida.json")
-_KEY = "tipos_salida"
+from database import get_db
 
 
 def cargar() -> list:
-    with open(_DATA_PATH, "r", encoding="utf-8") as f:
-        datos = json.load(f)
-    registros = datos.get(_KEY, [])
-    for r in registros:
-        r.setdefault("estado", "HABILITADA")
-    return registros
-
-
-def _guardar(registros: list):
-    with open(_DATA_PATH, "w", encoding="utf-8") as f:
-        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+    db = get_db()
+    try:
+        return db.get_tipos_salida()
+    finally:
+        db.close()
 
 
 def agregar(registros: list, datos: dict) -> dict:
-    max_id = max((r["id"] for r in registros), default=0)
-    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
-    registros.append(nuevo)
-    _guardar(registros)
-    return nuevo
+    db = get_db()
+    try:
+        tipo = datos.get("tipo_salida", "")
+        nuevo_id = db.crear_tipo_salida(tipo)
+        nuevo = {"id": nuevo_id, "tipo_salida": tipo, "estado": "HABILITADA"}
+        registros.append(nuevo)
+        return nuevo
+    finally:
+        db.close()
 
 
 def actualizar(registros: list, id_: int, datos: dict):
-    for r in registros:
-        if r["id"] == id_:
-            r.update(datos)
-            break
-    _guardar(registros)
+    db = get_db()
+    try:
+        tipo = datos.get("tipo_salida", "")
+        estado = datos.get("estado", "HABILITADA")
+        db.actualizar_tipo_salida(id_, tipo, estado)
+        for r in registros:
+            if r["id"] == id_:
+                r.update(datos)
+                break
+    finally:
+        db.close()
 
 
 def habilitar(registros: list, id_: int):
-    for r in registros:
-        if r["id"] == id_:
-            r["estado"] = "HABILITADA"
-            break
-    _guardar(registros)
+    db = get_db()
+    try:
+        db.habilitar_tipo_salida(id_)
+        for r in registros:
+            if r["id"] == id_:
+                r["estado"] = "HABILITADA"
+                break
+    finally:
+        db.close()
 
 
 def inhabilitar(registros: list, id_: int):
-    for r in registros:
-        if r["id"] == id_:
-            r["estado"] = "INHABILITADA"
-            break
-    _guardar(registros)
+    db = get_db()
+    try:
+        db.inhabilitar_tipo_salida(id_)
+        for r in registros:
+            if r["id"] == id_:
+                r["estado"] = "INHABILITADA"
+                break
+    finally:
+        db.close()

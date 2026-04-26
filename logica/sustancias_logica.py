@@ -1,52 +1,56 @@
-import json
-
-from app_paths import resource_path
-
-_DATA_PATH = resource_path("data", "sustancias.json")
-_KEY = "maestrasSustancias"
+from database import get_db
 
 
 def cargar() -> list:
-    with open(_DATA_PATH, "r", encoding="utf-8") as f:
-        datos = json.load(f)
-    registros = datos.get(_KEY, [])
-    for r in registros:
-        r.setdefault("estado", "HABILITADA")
-    return registros
-
-
-def _guardar(registros: list):
-    with open(_DATA_PATH, "w", encoding="utf-8") as f:
-        json.dump({_KEY: registros}, f, ensure_ascii=False, indent=2)
+    db = get_db()
+    try:
+        return db.get_sustancias()
+    finally:
+        db.close()
 
 
 def agregar(registros: list, datos: dict) -> dict:
-    max_id = max((r["id"] for r in registros), default=0)
-    nuevo = {"id": max_id + 1, "estado": "HABILITADA", **datos}
-    registros.append(nuevo)
-    _guardar(registros)
-    return nuevo
+    db = get_db()
+    try:
+        nuevo_id = db.crear_sustancia(datos)
+        nuevo = {"id": nuevo_id, "estado": "HABILITADA", **datos}
+        registros.append(nuevo)
+        return nuevo
+    finally:
+        db.close()
 
 
 def actualizar(registros: list, id_: int, datos: dict):
-    for r in registros:
-        if r["id"] == id_:
-            r.update(datos)
-            break
-    _guardar(registros)
+    db = get_db()
+    try:
+        db.actualizar_sustancia(id_, datos)
+        for r in registros:
+            if r["id"] == id_:
+                r.update(datos)
+                break
+    finally:
+        db.close()
 
 
 def habilitar(registros: list, id_: int):
-    for r in registros:
-        if r["id"] == id_:
-            r["estado"] = "HABILITADA"
-            break
-    _guardar(registros)
+    db = get_db()
+    try:
+        db.habilitar_sustancia(id_)
+        for r in registros:
+            if r["id"] == id_:
+                r["estado"] = "HABILITADA"
+                break
+    finally:
+        db.close()
 
 
 def inhabilitar(registros: list, id_: int):
-    for r in registros:
-        if r["id"] == id_:
-            r["estado"] = "INHABILITADA"
-            break
-    _guardar(registros)
+    db = get_db()
+    try:
+        db.inhabilitar_sustancia(id_)
+        for r in registros:
+            if r["id"] == id_:
+                r["estado"] = "INHABILITADA"
+                break
+    finally:
+        db.close()

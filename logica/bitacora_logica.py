@@ -1,6 +1,4 @@
-from datetime import datetime
-
-from logica import movimientos_common as common
+from database import get_db
 
 
 def registrar(modulo, accion, id_registro, detalle="", usuario="SISTEMA"):
@@ -18,45 +16,32 @@ def registrar_campos(tipo_operacion, id_registro, usuario="SISTEMA", cambios=Non
     if not cambios:
         cambios = [{"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "SIN CAMBIOS"}]
 
-    rows = cargar()
-    now_txt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    for c in cambios:
-        rows.append({
-            "id": common.next_id(rows),
-            "fecha_hora": now_txt,
-            "usuario": usuario,
-            "tipo_operacion": str(tipo_operacion).upper(),
-            "id_registro": id_registro,
-            "campo": str(c.get("campo", "")),
-            "valor_anterior": str(c.get("valor_anterior", "")),
-            "valor_nuevo": str(c.get("valor_nuevo", "")),
-        })
-    guardar(rows)
+    db = get_db()
+    try:
+        for c in cambios:
+            db.registrar_bitacora(
+                usuario=str(usuario or ""),
+                tipo_operacion=str(tipo_operacion or "").upper(),
+                id_registro=id_registro or 0,
+                campo=str(c.get("campo", "")),
+                valor_anterior=str(c.get("valor_anterior", "") or ""),
+                valor_nuevo=str(c.get("valor_nuevo", "") or ""),
+            )
+    finally:
+        db.close()
 
 
 def cargar():
-    rows = common.load_json(common.BITACORA_PATH, "bitacora")
-    out = []
-    for r in rows:
-        if "tipo_operacion" in r:
-            out.append(r)
-            continue
-        tipo = f"{str(r.get('modulo', '')).upper()}-{str(r.get('accion', '')).upper()}".strip("-")
-        out.append({
-            "id": r.get("id"),
-            "fecha_hora": r.get("fecha_hora", ""),
-            "usuario": r.get("usuario", ""),
-            "tipo_operacion": tipo,
-            "id_registro": r.get("id_registro", ""),
-            "campo": "DETALLE",
-            "valor_anterior": "",
-            "valor_nuevo": r.get("detalle", ""),
-        })
-    return out
+    db = get_db()
+    try:
+        return db.get_bitacora()
+    finally:
+        db.close()
 
 
 def guardar(rows):
-    common.save_json(common.BITACORA_PATH, "bitacora", rows)
+    """No-op: la bitácora se escribe registro a registro en la DB."""
+    pass
 
 
 def ultimos_200():

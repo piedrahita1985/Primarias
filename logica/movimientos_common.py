@@ -1,53 +1,4 @@
-import json
-from collections import defaultdict
-
-from app_paths import resource_path
-
-ENTRADAS_PATH = resource_path("data", "entradas.json")
-SALIDAS_PATH = resource_path("data", "salidas.json")
-SUSTANCIAS_PATH = resource_path("data", "sustancias.json")
-UNIDADES_PATH = resource_path("data", "unidad.json")
-UBICACIONES_PATH = resource_path("data", "maestrasUbicaciones.json")
-COLORES_PATH = resource_path("data", "color_refuerzo.json")
-CONDICIONES_PATH = resource_path("data", "condicion_alm.json")
-FABRICANTES_PATH = resource_path("data", "fabricante.json")
-BITACORA_PATH = resource_path("data", "bitacora.json")
-TIPOS_ENTRADA_PATH = resource_path("data", "tipo_entrada.json")
-TIPOS_SALIDA_PATH = resource_path("data", "tipo_salida.json")
-INVENTARIO_PATH = resource_path("data", "inventario.json")
-
-
-def load_json(path, key):
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get(key, [])
-
-
-def save_json(path, key, items):
-    compact_files = {
-        ENTRADAS_PATH,
-        SALIDAS_PATH,
-        BITACORA_PATH,
-        INVENTARIO_PATH,
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        if path in compact_files:
-            records = [
-                "  " + json.dumps(item, ensure_ascii=False, separators=(", ", ": "))
-                for item in items
-            ]
-            if records:
-                f.write("{ \"" + key + "\": [\n")
-                f.write(",\n".join(records))
-                f.write("\n] }\n")
-            else:
-                f.write("{ \"" + key + "\": [] }\n")
-        else:
-            json.dump({key: items}, f, ensure_ascii=False, indent=2)
-
-
-def next_id(items):
-    return max((i.get("id", 0) for i in items), default=0) + 1
+from database import get_db
 
 
 def to_float(value):
@@ -72,65 +23,70 @@ def map_sustancia_by_codigo(sustancias):
 
 
 def cargar_maestras():
-    sustancias = load_json(SUSTANCIAS_PATH, "maestrasSustancias")
-    unidades = load_json(UNIDADES_PATH, "unidad")
-    ubicaciones = load_json(UBICACIONES_PATH, "maestrasUbicaciones")
-    colores = load_json(COLORES_PATH, "color_refuerzo")
-    condiciones = load_json(CONDICIONES_PATH, "condicion_alm")
-    fabricantes = load_json(FABRICANTES_PATH, "fabricantes")
-    tipos_entrada = load_json(TIPOS_ENTRADA_PATH, "tipos_entrada")
-    tipos_salida = load_json(TIPOS_SALIDA_PATH, "tipos_salida")
+    db = get_db()
+    try:
+        sustancias  = db.get_sustancias()
+        unidades    = db.get_unidades()
+        ubicaciones = db.get_ubicaciones()
+        colores     = db.get_colores()
+        condiciones = db.get_condiciones()
+        fabricantes = db.get_fabricantes()
+        tipos_entrada = db.get_tipos_entrada()
+        tipos_salida  = db.get_tipos_salida()
+    finally:
+        db.close()
 
-    def activos(rows):
+    def habilitados(rows):
         return [r for r in rows if r.get("estado", "HABILITADA") == "HABILITADA"]
 
     return {
-        "sustancias": activos(sustancias),
-        "unidades": activos(unidades),
-        "ubicaciones": activos(ubicaciones),
-        "colores": activos(colores),
-        "condiciones": activos(condiciones),
-        "fabricantes": activos(fabricantes),
-        "tipos_entrada": activos(tipos_entrada),
-        "tipos_salida": activos(tipos_salida),
+        "sustancias":    habilitados(sustancias),
+        "unidades":      habilitados(unidades),
+        "ubicaciones":   habilitados(ubicaciones),
+        "colores":       habilitados(colores),
+        "condiciones":   habilitados(condiciones),
+        "fabricantes":   habilitados(fabricantes),
+        "tipos_entrada": habilitados(tipos_entrada),
+        "tipos_salida":  habilitados(tipos_salida),
     }
 
 
 def cargar_entradas():
-    rows = load_json(ENTRADAS_PATH, "entradas")
-    for r in rows:
-        r.setdefault("estado", "ACTIVA")
-    return rows
+    """Devuelve la lista de items de inventario (equivale al antiguo entradas.json)."""
+    db = get_db()
+    try:
+        return db.get_inventario()
+    finally:
+        db.close()
 
 
 def guardar_entradas(rows):
-    save_json(ENTRADAS_PATH, "entradas", rows)
+    """No-op: en DB el guardado se hace por registro individual."""
+    pass
 
 
 def cargar_salidas():
-    rows = load_json(SALIDAS_PATH, "salidas")
-    for r in rows:
-        r.setdefault("estado", "ACTIVA")
-    return rows
+    db = get_db()
+    try:
+        return db.get_salidas()
+    finally:
+        db.close()
 
 
 def guardar_salidas(rows):
-    save_json(SALIDAS_PATH, "salidas", rows)
+    """No-op: en DB el guardado se hace por registro individual."""
+    pass
+
+
+def next_id(items):
+    """Compatibilidad: genera un ID secuencial a partir de una lista."""
+    return max((i.get("id", 0) for i in items), default=0) + 1
 
 
 def stock_por_entrada(entradas, salidas):
-    salidas_acum = defaultdict(float)
-    for s in salidas:
-        if s.get("estado", "ACTIVA") != "ACTIVA":
-            continue
-        entrada_id = s.get("id_entrada")
-        salidas_acum[entrada_id] += to_float(s.get("cantidad"))
-
-    stock = {}
-    for e in entradas:
-        if e.get("estado", "ACTIVA") != "ACTIVA":
-            continue
-        ingreso = to_float(e.get("cantidad"))
-        egreso = salidas_acum[e.get("id", -1)]
-        stock[e.get("id", -1)] = max(0.0, ingreso - egreso)
-    return stock
+    """
+    Devuelve {id_inventario: cantidad_actual}.
+    En DB ya tenemos cantidad_actual en cada item de inventario.
+    """
+    return {r["id"]: to_float(r.get("cantidad_actual", r.get("cantidad", 0)))
+            for r in entradas}
