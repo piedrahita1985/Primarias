@@ -45,6 +45,7 @@ class InventarioWindow(tk.Toplevel):
         self.configure(bg=COLORS["secondary"])
         apply_default_window(self, min_width=1100, min_height=700)
         self._tooltip = None
+        self._refresh_job = None
 
         draw_title(self, "Sistema de Gestion - Inventario")
 
@@ -96,8 +97,10 @@ class InventarioWindow(tk.Toplevel):
 
         self.tree.bind("<Motion>", self._on_tree_motion)
         self.tree.bind("<Leave>", lambda _e: self._hide_tooltip())
+        self.bind("<Destroy>", self._on_destroy)
 
         self._load_data()
+        self._schedule_refresh()
 
     def _load_data(self):
         self.tree.delete(*self.tree.get_children())
@@ -176,3 +179,22 @@ class InventarioWindow(tk.Toplevel):
         if self._tooltip is not None:
             self._tooltip.destroy()
             self._tooltip = None
+
+    def _schedule_refresh(self):
+        # Auto-refresco para reflejar nuevas entradas/salidas sin cerrar la ventana.
+        self._refresh_job = self.after(3000, self._refresh_tick)
+
+    def _refresh_tick(self):
+        self._refresh_job = None
+        if not self.winfo_exists():
+            return
+        self._load_data()
+        self._schedule_refresh()
+
+    def _on_destroy(self, _event=None):
+        if self._refresh_job is not None:
+            try:
+                self.after_cancel(self._refresh_job)
+            except Exception:
+                pass
+            self._refresh_job = None

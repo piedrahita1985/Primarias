@@ -82,6 +82,15 @@ def _col_existe(conn, tabla: str, columna: str) -> bool:
     return any(row[1] == columna for row in cur.fetchall())
 
 
+def _inventario_permite_anulado(conn) -> bool:
+    cur = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventario'"
+    )
+    row = cur.fetchone()
+    ddl = row[0] if row and row[0] else ""
+    return "ANULADO" in ddl.upper()
+
+
 def _migrar_schema(conn):
     """
     Añade columnas faltantes a tablas existentes (idempotente).
@@ -92,7 +101,7 @@ def _migrar_schema(conn):
     # ── 1. Estado en catálogos simples ──────────────────────────────────────
     catalogos_sin_estado = [
         "fabricantes", "unidad", "condicion_alm",
-        "color_refuerzo", "maestras_ubicaciones",
+        "color_refuerzo", "maestras_ubicaciones", "maestras_sustancias",
     ]
     for tabla in catalogos_sin_estado:
         if not _col_existe(conn, tabla, "estado"):
@@ -115,6 +124,52 @@ def _migrar_schema(conn):
     for col, tipo in extra_inventario:
         if not _col_existe(conn, "inventario", col):
             conn.execute(f"ALTER TABLE inventario ADD COLUMN {col} {tipo}")
+
+    # ── 2.1 Permitir estado ANULADO en inventario (reconstrucción idempotente)
+    if not _inventario_permite_anulado(conn):
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS inventario_new (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                id_sustancia      INTEGER NOT NULL REFERENCES maestras_sustancias(id),
+                id_ubicacion      INTEGER REFERENCES maestras_ubicaciones(id),
+                id_fabricante     INTEGER REFERENCES fabricantes(id),
+                id_unidad         INTEGER REFERENCES unidad(id),
+                id_condicion      INTEGER REFERENCES condicion_alm(id),
+                id_color          INTEGER REFERENCES color_refuerzo(id),
+                lote              TEXT,
+                fecha_vencimiento TEXT,
+                cantidad_actual   REAL    NOT NULL DEFAULT 0,
+                estado            TEXT    NOT NULL DEFAULT 'ACTIVO'
+                                  CHECK(estado IN ('ACTIVO','AGOTADO','VENCIDO','ANULADO')),
+                potencia          TEXT,
+                catalogo          TEXT,
+                presentacion      TEXT,
+                certificado_anl   INTEGER NOT NULL DEFAULT 0,
+                ficha_seguridad   INTEGER NOT NULL DEFAULT 0,
+                factura_compra    INTEGER NOT NULL DEFAULT 0,
+                fecha_entrada     TEXT,
+                factura           TEXT,
+                observaciones     TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO inventario_new
+                (id, id_sustancia, id_ubicacion, id_fabricante, id_unidad,
+                 id_condicion, id_color, lote, fecha_vencimiento,
+                 cantidad_actual, estado,
+                 potencia, catalogo, presentacion,
+                 certificado_anl, ficha_seguridad, factura_compra,
+                 fecha_entrada, factura, observaciones)
+            SELECT id, id_sustancia, id_ubicacion, id_fabricante, id_unidad,
+                   id_condicion, id_color, lote, fecha_vencimiento,
+                   cantidad_actual, estado,
+                   potencia, catalogo, presentacion,
+                   certificado_anl, ficha_seguridad, factura_compra,
+                   fecha_entrada, factura, observaciones
+              FROM inventario
+        """)
+        conn.execute("DROP TABLE inventario")
+        conn.execute("ALTER TABLE inventario_new RENAME TO inventario")
 
     # ── 3. Columnas adicionales en salidas ───────────────────────────────────
     extra_salidas = [
@@ -749,14 +804,15 @@ class KardexDB:
         return self._insert(
             f"""INSERT INTO maestras_sustancias
                 (codigo, nombre, propiedad, tipo_muestras, uso_previsto,
-                 cantidad_minima, codigo_sistema)
-                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
+                 cantidad_minima, codigo_sistema, estado)
+                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
             (
                 datos["codigo"], datos["nombre"],
                 datos.get("propiedad"), datos.get("tipo_muestras"),
                 datos.get("uso_previsto"),
                 float(datos.get("cantidad_minima") or 0),
                 datos.get("codigo_sistema"),
+                "HABILITADA",
             ),
         )
 
@@ -778,12 +834,20 @@ class KardexDB:
         self.commit()
 
     def habilitar_sustancia(self, id_: int):
-        """Sustancias no tienen estado en DB; no-op reservado para compatibilidad."""
-        pass
+        ph = self._ph()
+        self._execute(
+            f"UPDATE maestras_sustancias SET estado={ph} WHERE id={ph}",
+            ("HABILITADA", id_),
+        )
+        self.commit()
 
     def inhabilitar_sustancia(self, id_: int):
-        """Sustancias no tienen estado en DB; no-op reservado para compatibilidad."""
-        pass
+        ph = self._ph()
+        self._execute(
+            f"UPDATE maestras_sustancias SET estado={ph} WHERE id={ph}",
+            ("INHABILITADA", id_),
+        )
+        self.commit()
 
     # ══════════════════════════════════════════════════════════════════════
     # INVENTARIO (lotes/items)
@@ -821,7 +885,13 @@ class KardexDB:
             r.setdefault("id_color_refuerzo", r.get("id_color"))
             r.setdefault("id_condicion_alm", r.get("id_condicion"))
             r.setdefault("cantidad", r.get("cantidad_actual", 0))
-            r.setdefault("estado", "ACTIVA" if r.get("estado") == "ACTIVO" else r.get("estado", "ACTIVA"))
+            estado_raw = str(r.get("estado", "ACTIVA") or "").upper()
+            if estado_raw == "ACTIVO":
+                r["estado"] = "ACTIVA"
+            elif estado_raw == "ANULADO":
+                r["estado"] = "ANULADA"
+            else:
+                r["estado"] = r.get("estado", "ACTIVA")
             r.setdefault("fecha_entrada", r.get("fecha_entrada", ""))
             r.setdefault("certificado_anl", bool(r.get("certificado_anl", 0)))
             r.setdefault("ficha_seguridad", bool(r.get("ficha_seguridad", 0)))
