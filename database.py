@@ -82,6 +82,39 @@ def _col_existe(conn, tabla: str, columna: str) -> bool:
     return any(row[1] == columna for row in cur.fetchall())
 
 
+def _col_existe_universal(conn, motor: str, tabla: str, columna: str) -> bool:
+    """Detecta si una columna existe - compatible con SQLite y SQL Server."""
+    if motor == "sqlite":
+        cur = conn.execute(f"PRAGMA table_info({tabla})")
+        return any(row[1] == columna for row in cur.fetchall())
+    else:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_NAME = ? AND COLUMN_NAME = ?",
+            (tabla, columna),
+        )
+        row = cursor.fetchone()
+        return bool(row and row[0] > 0)
+
+
+def _add_column_universal(conn, motor: str, tabla: str, columna: str,
+                          tipo: str, default=None) -> None:
+    """Agrega una columna - compatible con SQLite y SQL Server."""
+    if motor == "sqlite":
+        sql = f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}"
+        if default is not None:
+            sql += f" DEFAULT {default}"
+        conn.execute(sql)
+    else:
+        sql = f"ALTER TABLE {tabla} ADD {columna} {tipo}"
+        if default is not None:
+            sql += f" CONSTRAINT DF_{tabla}_{columna} DEFAULT ({default})"
+        cursor = conn.cursor()
+        cursor.execute(sql)
+    conn.commit()
+
+
 def _inventario_permite_anulado(conn) -> bool:
     cur = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventario'"
@@ -315,7 +348,617 @@ def _migrar_schema(conn):
         conn.execute("DROP TABLE check_clientes")
         conn.execute("ALTER TABLE check_clientes_new RENAME TO check_clientes")
 
+    if not _col_existe(conn, "prestamos", "fecha_limite"):
+        conn.execute("ALTER TABLE prestamos ADD COLUMN fecha_limite TEXT")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_usuario ON prestamos(id_usuario)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_destino ON prestamos(id_usuario_destino)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_estado ON prestamos(estado_recepcion)")
+
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.commit()
+
+
+def _migrar_schema_hibrido(conn, motor: str) -> None:
+    """Migración de esquema compatible con ambos motores (idempotente)."""
+    if motor == "sqlite":
+        _migrar_schema(conn)
+        return
+
+    # ── SQL Server: agregar columnas faltantes ────────────────────────────
+    catalogos = [
+        "fabricantes", "unidad", "condicion_alm",
+        "color_refuerzo", "maestras_ubicaciones", "maestras_sustancias",
+    ]
+    for tabla in catalogos:
+        if not _col_existe_universal(conn, motor, tabla, "estado"):
+            _add_column_universal(conn, motor, tabla, "estado",
+                                  "NVARCHAR(20) NOT NULL", "'HABILITADA'")
+
+    extra_inventario = [
+        ("potencia",        "NVARCHAR(MAX)",          None),
+        ("catalogo",        "NVARCHAR(MAX)",          None),
+        ("presentacion",    "NVARCHAR(MAX)",          None),
+        ("certificado_anl", "INT NOT NULL",           "0"),
+        ("ficha_seguridad", "INT NOT NULL",           "0"),
+        ("factura_compra",  "INT NOT NULL",           "0"),
+        ("fecha_entrada",   "NVARCHAR(30)",           None),
+        ("factura",         "NVARCHAR(MAX)",          None),
+        ("observaciones",   "NVARCHAR(MAX)",          None),
+    ]
+    for col, tipo, default in extra_inventario:
+        if not _col_existe_universal(conn, motor, "inventario", col):
+            _add_column_universal(conn, motor, "inventario", col, tipo, default)
+
+    extra_salidas = [
+        ("estado",       "NVARCHAR(20) NOT NULL", "'ACTIVA'"),
+        ("actividad",    "NVARCHAR(MAX)",          None),
+        ("fecha_salida", "NVARCHAR(30)",           None),
+        ("factura",      "NVARCHAR(MAX)",          None),
+    ]
+    for col, tipo, default in extra_salidas:
+        if not _col_existe_universal(conn, motor, "salidas", col):
+            _add_column_universal(conn, motor, "salidas", col, tipo, default)
+
+    extra_prestamos = [
+        ("id_usuario_destino",    "INT",                   None),
+        ("firma_presta_path",     "NVARCHAR(MAX)",          None),
+        ("fecha_prestamo",        "NVARCHAR(30)",           None),
+        ("estado_recepcion",      "NVARCHAR(20) NOT NULL", "'PENDIENTE'"),
+        ("fecha_recepcion",       "NVARCHAR(30)",           None),
+        ("observacion_recepcion", "NVARCHAR(MAX)",          None),
+        ("id_usuario_recibe",     "INT",                   None),
+        ("id_salida_prestamo",    "INT",                   None),
+        ("estado_devolucion",     "NVARCHAR(20) NOT NULL", "'NO_APLICA'"),
+        ("id_usuario_devuelve",   "INT",                   None),
+        ("fecha_limite",          "NVARCHAR(30)",           None),
+    ]
+    for col, tipo, default in extra_prestamos:
+        if not _col_existe_universal(conn, motor, "prestamos", col):
+            _add_column_universal(conn, motor, "prestamos", col, tipo, default)
+
+
+def _crear_tablas_sqlserver(conn) -> None:
+    """Crea el esquema base en SQL Server (idempotente)."""
+    cursor = conn.cursor()
+
+    def _si_no_existe(nombre, ddl):
+        cursor.execute(
+            f"IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES "
+            f"WHERE TABLE_NAME = '{nombre}') BEGIN {ddl} END"
+        )
+
+    _si_no_existe("fabricantes", """
+        CREATE TABLE fabricantes (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            fabricante NVARCHAR(255) NOT NULL,
+            estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
+            CONSTRAINT uq_fabricantes UNIQUE (fabricante)
+        )
+    """)
+    _si_no_existe("unidad", """
+        CREATE TABLE unidad (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            unidad NVARCHAR(100) NOT NULL,
+            estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
+            CONSTRAINT uq_unidad UNIQUE (unidad)
+        )
+    """)
+    _si_no_existe("condicion_alm", """
+        CREATE TABLE condicion_alm (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            condicion NVARCHAR(255) NOT NULL,
+            estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
+            CONSTRAINT uq_condicion_alm UNIQUE (condicion)
+        )
+    """)
+    _si_no_existe("color_refuerzo", """
+        CREATE TABLE color_refuerzo (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            color_refuerzo NVARCHAR(100) NOT NULL,
+            estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
+            CONSTRAINT uq_color_refuerzo UNIQUE (color_refuerzo)
+        )
+    """)
+    _si_no_existe("tipo_entrada", """
+        CREATE TABLE tipo_entrada (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            tipo_entrada NVARCHAR(255) NOT NULL,
+            estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
+            CONSTRAINT uq_tipo_entrada UNIQUE (tipo_entrada)
+        )
+    """)
+    _si_no_existe("tipo_salida", """
+        CREATE TABLE tipo_salida (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            tipo_salida NVARCHAR(255) NOT NULL,
+            estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
+            CONSTRAINT uq_tipo_salida UNIQUE (tipo_salida)
+        )
+    """)
+    _si_no_existe("maestras_ubicaciones", """
+        CREATE TABLE maestras_ubicaciones (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            ubicacion NVARCHAR(255) NOT NULL,
+            no_caja NVARCHAR(100) NOT NULL,
+            estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA'
+        )
+    """)
+    _si_no_existe("maestras_sustancias", """
+        CREATE TABLE maestras_sustancias (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            codigo NVARCHAR(100) NOT NULL,
+            nombre NVARCHAR(MAX) NOT NULL,
+            propiedad NVARCHAR(MAX),
+            tipo_muestras NVARCHAR(MAX),
+            uso_previsto NVARCHAR(MAX),
+            cantidad_minima FLOAT DEFAULT 0,
+            codigo_sistema NVARCHAR(100),
+            estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
+            CONSTRAINT uq_maestras_sustancias UNIQUE (codigo)
+        )
+    """)
+    _si_no_existe("usuarios", """
+        CREATE TABLE usuarios (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            usuario NVARCHAR(100) NOT NULL,
+            contrasena NVARCHAR(255) NOT NULL,
+            nombre NVARCHAR(255) NOT NULL,
+            rol NVARCHAR(50),
+            estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
+            firma_path NVARCHAR(MAX),
+            firma_password NVARCHAR(255),
+            CONSTRAINT uq_usuarios UNIQUE (usuario)
+        )
+    """)
+    _si_no_existe("permisos_usuario", """
+        CREATE TABLE permisos_usuario (
+            id_usuario INT PRIMARY KEY,
+            entradas INT DEFAULT 1,
+            salidas INT DEFAULT 1,
+            inventario INT DEFAULT 1,
+            bitacora INT DEFAULT 1,
+            prestamos INT DEFAULT 1,
+            recibidos INT DEFAULT 1,
+            sustancias INT DEFAULT 1,
+            tipos_entrada INT DEFAULT 1,
+            tipos_salida INT DEFAULT 1,
+            fabricantes INT DEFAULT 1,
+            unidades INT DEFAULT 1,
+            ubicaciones INT DEFAULT 1,
+            condiciones INT DEFAULT 1,
+            colores INT DEFAULT 1,
+            usuarios INT DEFAULT 1,
+            FOREIGN KEY (id_usuario) REFERENCES usuarios(id)
+        )
+    """)
+    _si_no_existe("inventario", """
+        CREATE TABLE inventario (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            id_sustancia INT NOT NULL,
+            id_ubicacion INT,
+            id_fabricante INT,
+            id_unidad INT,
+            id_condicion INT,
+            id_color INT,
+            lote NVARCHAR(100),
+            fecha_vencimiento NVARCHAR(30),
+            cantidad_actual FLOAT NOT NULL DEFAULT 0,
+            estado NVARCHAR(20) NOT NULL DEFAULT 'ACTIVO'
+                CHECK (estado IN ('ACTIVO','AGOTADO','VENCIDO','ANULADO')),
+            potencia NVARCHAR(MAX),
+            catalogo NVARCHAR(MAX),
+            presentacion NVARCHAR(MAX),
+            certificado_anl INT NOT NULL DEFAULT 0,
+            ficha_seguridad INT NOT NULL DEFAULT 0,
+            factura_compra INT NOT NULL DEFAULT 0,
+            fecha_entrada NVARCHAR(30),
+            factura NVARCHAR(MAX),
+            observaciones NVARCHAR(MAX),
+            FOREIGN KEY (id_sustancia) REFERENCES maestras_sustancias(id)
+        )
+    """)
+    _si_no_existe("entradas", """
+        CREATE TABLE entradas (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            id_inventario INT NOT NULL,
+            id_tipo_entrada INT NOT NULL,
+            id_usuario INT NOT NULL,
+            fecha_hora NVARCHAR(30) NOT NULL,
+            cantidad FLOAT NOT NULL,
+            observacion NVARCHAR(MAX),
+            certificado INT DEFAULT 0,
+            FOREIGN KEY (id_inventario) REFERENCES inventario(id),
+            FOREIGN KEY (id_tipo_entrada) REFERENCES tipo_entrada(id),
+            FOREIGN KEY (id_usuario) REFERENCES usuarios(id)
+        )
+    """)
+    _si_no_existe("salidas", """
+        CREATE TABLE salidas (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            id_inventario INT NOT NULL,
+            id_tipo_salida INT NOT NULL,
+            id_usuario INT NOT NULL,
+            fecha_hora NVARCHAR(30) NOT NULL,
+            cantidad FLOAT NOT NULL,
+            observacion NVARCHAR(MAX),
+            estado NVARCHAR(20) NOT NULL DEFAULT 'ACTIVA',
+            actividad NVARCHAR(MAX),
+            fecha_salida NVARCHAR(30),
+            factura NVARCHAR(MAX),
+            FOREIGN KEY (id_inventario) REFERENCES inventario(id),
+            FOREIGN KEY (id_tipo_salida) REFERENCES tipo_salida(id),
+            FOREIGN KEY (id_usuario) REFERENCES usuarios(id)
+        )
+    """)
+    _si_no_existe("prestamos", """
+        CREATE TABLE prestamos (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            id_inventario INT NOT NULL,
+            id_usuario INT NOT NULL,
+            fecha_hora NVARCHAR(30) NOT NULL,
+            cantidad FLOAT NOT NULL,
+            solicitante NVARCHAR(MAX),
+            observacion NVARCHAR(MAX),
+            estado NVARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
+            fecha_devolucion NVARCHAR(30),
+            cantidad_devuelta FLOAT,
+            observacion_devolucion NVARCHAR(MAX),
+            id_usuario_destino INT,
+            firma_presta_path NVARCHAR(MAX),
+            fecha_prestamo NVARCHAR(30),
+            estado_recepcion NVARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
+            fecha_recepcion NVARCHAR(30),
+            observacion_recepcion NVARCHAR(MAX),
+            id_usuario_recibe INT,
+            id_salida_prestamo INT,
+            estado_devolucion NVARCHAR(20) NOT NULL DEFAULT 'NO_APLICA',
+            id_usuario_devuelve INT,
+            fecha_limite NVARCHAR(30)
+        )
+    """)
+    _si_no_existe("check_cecif", """
+        CREATE TABLE check_cecif (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            id_entrada INT, id_usuario INT,
+            fecha_hora NVARCHAR(30) NOT NULL,
+            estado NVARCHAR(20), observacion NVARCHAR(MAX),
+            fecha_recepcion NVARCHAR(30), id_proveedor INT,
+            no_orden_compra NVARCHAR(100), id_sustancia INT,
+            lote NVARCHAR(100), cantidad NVARCHAR(100),
+            observacion_producto NVARCHAR(MAX), observaciones NVARCHAR(MAX),
+            id_usuario_aprobo INT, id_usuario_verifico INT,
+            ver_nombre NVARCHAR(20), ver_no_lote NVARCHAR(20),
+            ver_cantidad NVARCHAR(20), ver_rotulo_identificacion NVARCHAR(20),
+            ver_fecha_fabricacion NVARCHAR(20), ver_fecha_vencimiento NVARCHAR(20),
+            ver_fabricante NVARCHAR(20), ver_rotulos_seguridad NVARCHAR(20),
+            ver_ficha_seguridad NVARCHAR(20), ver_certificado_calidad NVARCHAR(20),
+            ver_golpes_roturas NVARCHAR(20), ver_cumple_especificaciones NVARCHAR(20)
+        )
+    """)
+    _si_no_existe("check_clientes", """
+        CREATE TABLE check_clientes (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            id_entrada INT, id_usuario INT,
+            fecha_hora NVARCHAR(30) NOT NULL,
+            estado NVARCHAR(20), observacion NVARCHAR(MAX),
+            fecha_recepcion NVARCHAR(30), nombre_cliente NVARCHAR(MAX),
+            id_sustancia INT, cantidad NVARCHAR(100),
+            observacion_producto NVARCHAR(MAX), observaciones NVARCHAR(MAX),
+            id_usuario_reviso INT, id_usuario_verifico INT,
+            vn_nombre NVARCHAR(20), vn_no_lote NVARCHAR(20),
+            vn_cantidad NVARCHAR(20), vn_rotulo_identificacion NVARCHAR(20),
+            vn_fecha_fabricacion NVARCHAR(20), vn_fecha_vencimiento NVARCHAR(20),
+            vn_fabricante NVARCHAR(20), vn_rotulos_seguridad NVARCHAR(20),
+            vn_ficha_seguridad NVARCHAR(20), vn_certificado_calidad NVARCHAR(20),
+            vn_golpes_roturas NVARCHAR(20), vn_cumple_especificaciones NVARCHAR(20),
+            vd_nombre NVARCHAR(20), vd_no_lote NVARCHAR(20),
+            vd_rotulo_identificacion NVARCHAR(20), vd_fecha_vencimiento NVARCHAR(20),
+            vd_certificado_calidad NVARCHAR(20), vd_ficha_seguridad NVARCHAR(20),
+            vd_golpes_roturas NVARCHAR(20),
+            vd_condiciones_almacenamiento NVARCHAR(20), vd_carta_correo NVARCHAR(20)
+        )
+    """)
+    _si_no_existe("bitacora", """
+        CREATE TABLE bitacora (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            fecha_hora NVARCHAR(30) NOT NULL,
+            usuario NVARCHAR(100) NOT NULL,
+            tipo_operacion NVARCHAR(100) NOT NULL,
+            id_registro INT NOT NULL,
+            campo NVARCHAR(100),
+            valor_anterior NVARCHAR(MAX),
+            valor_nuevo NVARCHAR(MAX)
+        )
+    """)
+    conn.commit()
+
+
+def _crear_tablas_si_no_existen(conn, motor="sqlite"):
+    """Crea el esquema base para una base nueva (idempotente)."""
+    if motor == "sqlserver":
+        _crear_tablas_sqlserver(conn)
+        return
+    conn.executescript(
+        """
+        -- 1. Catálogos base
+        CREATE TABLE IF NOT EXISTS fabricantes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fabricante TEXT UNIQUE NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'HABILITADA'
+        );
+
+        CREATE TABLE IF NOT EXISTS unidad (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            unidad TEXT UNIQUE NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'HABILITADA'
+        );
+
+        CREATE TABLE IF NOT EXISTS condicion_alm (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            condicion TEXT UNIQUE NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'HABILITADA'
+        );
+
+        CREATE TABLE IF NOT EXISTS color_refuerzo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            color_refuerzo TEXT UNIQUE NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'HABILITADA'
+        );
+
+        CREATE TABLE IF NOT EXISTS tipo_entrada (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo_entrada TEXT UNIQUE NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'HABILITADA'
+        );
+
+        CREATE TABLE IF NOT EXISTS tipo_salida (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo_salida TEXT UNIQUE NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'HABILITADA'
+        );
+
+        CREATE TABLE IF NOT EXISTS maestras_ubicaciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ubicacion TEXT NOT NULL,
+            no_caja TEXT NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'HABILITADA'
+        );
+
+        CREATE TABLE IF NOT EXISTS maestras_sustancias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo TEXT UNIQUE NOT NULL,
+            nombre TEXT NOT NULL,
+            propiedad TEXT,
+            tipo_muestras TEXT,
+            uso_previsto TEXT,
+            cantidad_minima REAL DEFAULT 0,
+            codigo_sistema TEXT,
+            estado TEXT NOT NULL DEFAULT 'HABILITADA'
+        );
+
+        -- 2. Usuarios y permisos
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT UNIQUE NOT NULL,
+            contrasena TEXT NOT NULL,
+            nombre TEXT NOT NULL,
+            rol TEXT,
+            estado TEXT NOT NULL DEFAULT 'HABILITADA',
+            firma_path TEXT,
+            firma_password TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS permisos_usuario (
+            id_usuario INTEGER PRIMARY KEY REFERENCES usuarios(id) ON DELETE CASCADE,
+            entradas INTEGER DEFAULT 1,
+            salidas INTEGER DEFAULT 1,
+            inventario INTEGER DEFAULT 1,
+            bitacora INTEGER DEFAULT 1,
+            prestamos INTEGER DEFAULT 1,
+            recibidos INTEGER DEFAULT 1,
+            sustancias INTEGER DEFAULT 1,
+            tipos_entrada INTEGER DEFAULT 1,
+            tipos_salida INTEGER DEFAULT 1,
+            fabricantes INTEGER DEFAULT 1,
+            unidades INTEGER DEFAULT 1,
+            ubicaciones INTEGER DEFAULT 1,
+            condiciones INTEGER DEFAULT 1,
+            colores INTEGER DEFAULT 1,
+            usuarios INTEGER DEFAULT 1
+        );
+
+        -- 3. Inventario y movimientos
+        CREATE TABLE IF NOT EXISTS inventario (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_sustancia INTEGER NOT NULL REFERENCES maestras_sustancias(id),
+            id_ubicacion INTEGER REFERENCES maestras_ubicaciones(id),
+            id_fabricante INTEGER REFERENCES fabricantes(id),
+            id_unidad INTEGER REFERENCES unidad(id),
+            id_condicion INTEGER REFERENCES condicion_alm(id),
+            id_color INTEGER REFERENCES color_refuerzo(id),
+            lote TEXT,
+            fecha_vencimiento TEXT,
+            cantidad_actual REAL NOT NULL DEFAULT 0,
+            estado TEXT NOT NULL DEFAULT 'ACTIVO' CHECK(estado IN ('ACTIVO','AGOTADO','VENCIDO','ANULADO')),
+            potencia TEXT,
+            catalogo TEXT,
+            presentacion TEXT,
+            certificado_anl INTEGER NOT NULL DEFAULT 0,
+            ficha_seguridad INTEGER NOT NULL DEFAULT 0,
+            factura_compra INTEGER NOT NULL DEFAULT 0,
+            fecha_entrada TEXT,
+            factura TEXT,
+            observaciones TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS entradas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_inventario INTEGER NOT NULL REFERENCES inventario(id) ON DELETE RESTRICT,
+            id_tipo_entrada INTEGER NOT NULL REFERENCES tipo_entrada(id),
+            id_usuario INTEGER NOT NULL REFERENCES usuarios(id),
+            fecha_hora TEXT NOT NULL,
+            cantidad REAL NOT NULL,
+            observacion TEXT,
+            certificado INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS salidas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_inventario INTEGER NOT NULL REFERENCES inventario(id) ON DELETE RESTRICT,
+            id_tipo_salida INTEGER NOT NULL REFERENCES tipo_salida(id),
+            id_usuario INTEGER NOT NULL REFERENCES usuarios(id),
+            fecha_hora TEXT NOT NULL,
+            cantidad REAL NOT NULL,
+            observacion TEXT,
+            estado TEXT NOT NULL DEFAULT 'ACTIVA',
+            actividad TEXT,
+            fecha_salida TEXT,
+            factura TEXT
+        );
+
+        -- 4. Préstamos
+        CREATE TABLE IF NOT EXISTS prestamos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_inventario INTEGER NOT NULL,
+            id_usuario INTEGER NOT NULL,
+            fecha_hora TEXT NOT NULL,
+            cantidad REAL NOT NULL,
+            solicitante TEXT,
+            observacion TEXT,
+            estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+            fecha_devolucion TEXT,
+            cantidad_devuelta REAL,
+            observacion_devolucion TEXT,
+            id_usuario_destino INTEGER,
+            firma_presta_path TEXT,
+            fecha_prestamo TEXT,
+            estado_recepcion TEXT NOT NULL DEFAULT 'PENDIENTE',
+            fecha_recepcion TEXT,
+            observacion_recepcion TEXT,
+            id_usuario_recibe INTEGER,
+            id_salida_prestamo INTEGER,
+            estado_devolucion TEXT NOT NULL DEFAULT 'NO_APLICA',
+            id_usuario_devuelve INTEGER,
+            fecha_limite TEXT
+        );
+
+        -- 5. Checklists
+        CREATE TABLE IF NOT EXISTS check_cecif (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_entrada INTEGER,
+            id_usuario INTEGER,
+            fecha_hora TEXT NOT NULL,
+            estado TEXT,
+            observacion TEXT,
+            fecha_recepcion TEXT,
+            id_proveedor INTEGER,
+            no_orden_compra TEXT,
+            id_sustancia INTEGER,
+            lote TEXT,
+            cantidad TEXT,
+            observacion_producto TEXT,
+            observaciones TEXT,
+            id_usuario_aprobo INTEGER,
+            id_usuario_verifico INTEGER,
+            ver_nombre TEXT,
+            ver_no_lote TEXT,
+            ver_cantidad TEXT,
+            ver_rotulo_identificacion TEXT,
+            ver_fecha_fabricacion TEXT,
+            ver_fecha_vencimiento TEXT,
+            ver_fabricante TEXT,
+            ver_rotulos_seguridad TEXT,
+            ver_ficha_seguridad TEXT,
+            ver_certificado_calidad TEXT,
+            ver_golpes_roturas TEXT,
+            ver_cumple_especificaciones TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS check_clientes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_entrada INTEGER,
+            id_usuario INTEGER,
+            fecha_hora TEXT NOT NULL,
+            estado TEXT,
+            observacion TEXT,
+            fecha_recepcion TEXT,
+            nombre_cliente TEXT,
+            id_sustancia INTEGER,
+            cantidad TEXT,
+            observacion_producto TEXT,
+            observaciones TEXT,
+            id_usuario_reviso INTEGER,
+            id_usuario_verifico INTEGER,
+            vn_nombre TEXT,
+            vn_no_lote TEXT,
+            vn_cantidad TEXT,
+            vn_rotulo_identificacion TEXT,
+            vn_fecha_fabricacion TEXT,
+            vn_fecha_vencimiento TEXT,
+            vn_fabricante TEXT,
+            vn_rotulos_seguridad TEXT,
+            vn_ficha_seguridad TEXT,
+            vn_certificado_calidad TEXT,
+            vn_golpes_roturas TEXT,
+            vn_cumple_especificaciones TEXT,
+            vd_nombre TEXT,
+            vd_no_lote TEXT,
+            vd_rotulo_identificacion TEXT,
+            vd_fecha_vencimiento TEXT,
+            vd_certificado_calidad TEXT,
+            vd_ficha_seguridad TEXT,
+            vd_golpes_roturas TEXT,
+            vd_condiciones_almacenamiento TEXT,
+            vd_carta_correo TEXT
+        );
+
+        -- 6. Bitácora
+        CREATE TABLE IF NOT EXISTS bitacora (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha_hora TEXT NOT NULL,
+            usuario TEXT NOT NULL,
+            tipo_operacion TEXT NOT NULL,
+            id_registro INTEGER NOT NULL,
+            campo TEXT,
+            valor_anterior TEXT,
+            valor_nuevo TEXT
+        );
+        """
+    )
+    conn.commit()
+
+
+def _sembrar_admin_si_no_existe(conn, motor="sqlite"):
+    """Inserta un admin por defecto en una base nueva sin usuarios."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM usuarios")
+    row = cursor.fetchone()
+    total = int(row[0] if row else 0)
+    if total > 0:
+        return
+
+    cursor.execute(
+        "INSERT INTO usuarios (usuario, contrasena, nombre, rol, estado) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("admin", "admin", "Administrador", "ADMIN", "HABILITADA"),
+    )
+    if motor == "sqlite":
+        admin_id = cursor.lastrowid
+    else:
+        cursor.execute("SELECT SCOPE_IDENTITY() AS id")
+        row = cursor.fetchone()
+        admin_id = int(row[0]) if row and row[0] is not None else None
+
+    if admin_id:
+        cursor.execute(
+            "INSERT INTO permisos_usuario "
+            "(id_usuario, entradas, salidas, inventario, bitacora, prestamos, "
+            "recibidos, sustancias, tipos_entrada, tipos_salida, fabricantes, "
+            "unidades, ubicaciones, condiciones, colores, usuarios) "
+            "VALUES (?,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1)",
+            (admin_id,),
+        )
     conn.commit()
 
 
@@ -326,9 +969,10 @@ def _migrar_schema(conn):
 class KardexDB:
     """Interfaz unificada. Funciona igual con SQLite y SQL Server."""
 
-    def __init__(self, conn):
+    def __init__(self, conn, motor="sqlite"):
         self._conn = conn
         self._cursor = conn.cursor()
+        self._motor = motor
 
     def close(self):
         self._conn.close()
@@ -354,11 +998,16 @@ class KardexDB:
     def _insert(self, sql: str, params: tuple = ()) -> int:
         self._execute(sql, params)
         self._conn.commit()
-        lid = self._cursor.lastrowid
-        if lid:
-            return lid
-        row = self._fetchone("SELECT @@IDENTITY AS id")
-        return row["id"] if row else None
+        lid = self._last_insert_id()
+        return lid if lid else 0
+
+    def _last_insert_id(self) -> int:
+        if self._motor == "sqlite":
+            return self._cursor.lastrowid
+        else:
+            self._cursor.execute("SELECT SCOPE_IDENTITY() AS id")
+            row = self._cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else None
 
     def _ph(self) -> str:
         return "?"
@@ -1236,8 +1885,8 @@ class KardexDB:
                 (id_inventario, id_usuario, fecha_hora, cantidad,
                  solicitante, observacion, estado,
                  id_usuario_destino, firma_presta_path, fecha_prestamo,
-                 estado_recepcion, estado_devolucion)
-                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},'PENDIENTE',{ph},{ph},{ph},'PENDIENTE','NO_APLICA')""",
+                 fecha_limite, estado_recepcion, estado_devolucion)
+                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},'PENDIENTE',{ph},{ph},{ph},{ph},'PENDIENTE','NO_APLICA')""",
             (
                 id_inv, id_usuario, now,
                 float(datos.get("cantidad", 0)),
@@ -1246,6 +1895,7 @@ class KardexDB:
                 datos.get("id_usuario_destino"),
                 datos.get("firma_presta_path"),
                 datos.get("fecha_prestamo", now[:10]),
+                datos.get("fecha_limite") or None,
             ),
         )
 
@@ -1583,9 +2233,10 @@ def get_db() -> KardexDB:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
-        # Ejecutar migraciones de esquema (idempotente)
-        _migrar_schema(conn)
-        return KardexDB(conn)
+        _crear_tablas_si_no_existen(conn, "sqlite")
+        _sembrar_admin_si_no_existe(conn, "sqlite")
+        _migrar_schema_hibrido(conn, "sqlite")
+        return KardexDB(conn, motor="sqlite")
 
     elif motor == "sqlserver":
         if not _PYODBC_DISPONIBLE:
@@ -1607,7 +2258,10 @@ def get_db() -> KardexDB:
                 f"PWD={ss['password']};"
             )
         conn = pyodbc.connect(cs)
-        return KardexDB(conn)
+        _crear_tablas_si_no_existen(conn, "sqlserver")
+        _sembrar_admin_si_no_existe(conn, "sqlserver")
+        _migrar_schema_hibrido(conn, "sqlserver")
+        return KardexDB(conn, motor="sqlserver")
 
     else:
         raise ValueError(f"Motor desconocido: '{motor}'. Usa 'sqlite' o 'sqlserver'.")

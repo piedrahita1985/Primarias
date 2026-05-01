@@ -135,14 +135,64 @@ def make_labeled_entry(parent, label, var, row, col, width=22, read_only=False):
     return entry
 
 
-def make_date_input(parent, row, col, label="Fecha", allow_past=True, empty_default=True):
-    tk.Label(
-        parent,
-        text=label,
-        bg=COLORS["secondary"],
-        fg=COLORS["text_dark"],
-        font=("Segoe UI", 9, "bold"),
-    ).grid(row=row, column=col, sticky="w", padx=8, pady=(6, 2))
+def _add_placeholder_to_entry(entry, var, placeholder):
+    """Agrega placeholder a un Entry normal."""
+    def on_focus_in(event):
+        if var.get() == placeholder:
+            var.set("")
+            entry.configure(fg=COLORS["text_dark"])
+
+    def on_focus_out(event):
+        if not var.get().strip():
+            var.set(placeholder)
+            entry.configure(fg=COLORS["text_muted"])
+
+    if not var.get():
+        var.set(placeholder)
+        entry.configure(fg=COLORS["text_muted"])
+
+    entry.bind("<FocusIn>", on_focus_in)
+    entry.bind("<FocusOut>", on_focus_out)
+
+
+def _add_placeholder_to_dateentry(widget, placeholder):
+    """Agrega placeholder a DateEntry."""
+    try:
+        entry = widget.entry
+        original_fg = entry.cget("fg")
+
+        def on_focus_in(e):
+            if entry.get() == placeholder:
+                entry.delete(0, "end")
+                entry.configure(fg=original_fg)
+
+        def on_focus_out(e):
+            if not entry.get():
+                entry.insert(0, placeholder)
+                entry.configure(fg=COLORS["text_muted"])
+
+        if not entry.get():
+            entry.insert(0, placeholder)
+            entry.configure(fg=COLORS["text_muted"])
+
+        entry.bind("<FocusIn>", on_focus_in)
+        entry.bind("<FocusOut>", on_focus_out)
+    except Exception:
+        pass
+
+
+def make_date_input(parent, row, col, label="Fecha", allow_past=True, empty_default=True,
+                   placeholder="YYYY-MM-DD", required=False):
+    if required:
+        make_required_label(parent, label, row, col)
+    else:
+        tk.Label(
+            parent,
+            text=label,
+            bg=COLORS["secondary"],
+            fg=COLORS["text_dark"],
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=row, column=col, sticky="w", padx=8, pady=(6, 2))
 
     if DateEntry is not None:
         kwargs = {}
@@ -158,13 +208,19 @@ def make_date_input(parent, row, col, label="Fecha", allow_past=True, empty_defa
             font=("Segoe UI", 10),
             **kwargs,
         )
+        if empty_default:
+            try:
+                widget.delete(0, "end")
+            except Exception:
+                pass
+        _add_placeholder_to_dateentry(widget, placeholder)
     else:
         val = tk.StringVar(value="" if empty_default else date.today().isoformat())
         widget = tk.Entry(
             parent,
             textvariable=val,
             bg=COLORS["surface"],
-            fg=COLORS["text_dark"],
+            fg=COLORS["text_muted"],
             font=("Segoe UI", 10),
             relief="flat",
             bd=0,
@@ -173,14 +229,10 @@ def make_date_input(parent, row, col, label="Fecha", allow_past=True, empty_defa
             highlightcolor=COLORS["primary"],
             width=20,
         )
+        _add_placeholder_to_entry(widget, val, placeholder)
         widget._fallback_var = val  # type: ignore[attr-defined]
 
     widget.grid(row=row + 1, column=col, sticky="ew", padx=8, pady=(0, 8))
-    if DateEntry is not None and empty_default:
-        try:
-            widget.delete(0, "end")
-        except Exception:
-            pass
     return widget
 
 
@@ -199,7 +251,7 @@ def get_date_value(widget):
     return ""
 
 
-def make_date_widget(parent):
+def make_date_widget(parent, placeholder="YYYY-MM-DD"):
     """Widget de fecha sin etiqueta, para usar inline con pack."""
     if DateEntry is not None:
         widget = DateEntry(
@@ -215,13 +267,14 @@ def make_date_widget(parent):
             widget.delete(0, "end")
         except Exception:
             pass
+        _add_placeholder_to_dateentry(widget, placeholder)
     else:
         val = tk.StringVar()
         widget = tk.Entry(
             parent,
             textvariable=val,
             bg=COLORS["surface"],
-            fg=COLORS["text_dark"],
+            fg=COLORS["text_muted"],
             font=("Segoe UI", 10),
             relief="flat",
             bd=0,
@@ -230,8 +283,61 @@ def make_date_widget(parent):
             highlightcolor=COLORS["primary"],
             width=14,
         )
+        _add_placeholder_to_entry(widget, val, placeholder)
         widget._fallback_var = val  # type: ignore[attr-defined]
     return widget
+
+
+def make_required_label(parent, text, row, col, **kwargs):
+    """Crea una etiqueta con asterisco rojo para campos obligatorios."""
+    frame = tk.Frame(parent, bg=COLORS["secondary"])
+    frame.grid(row=row, column=col, sticky="w", padx=8, pady=(6, 2))
+    tk.Label(
+        frame, text=text, bg=COLORS["secondary"],
+        fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold"),
+    ).pack(side="left")
+    tk.Label(
+        frame, text=" *", bg=COLORS["secondary"],
+        fg="#DC3545", font=("Segoe UI", 9, "bold"),
+    ).pack(side="left")
+    return frame
+
+
+def highlight_required_field(entry, is_valid):
+    """Resalta o quita el resaltado de un campo obligatorio."""
+    if is_valid:
+        try:
+            entry.configure(highlightbackground=COLORS["border_soft"], highlightthickness=1)
+        except Exception:
+            pass
+    else:
+        try:
+            entry.configure(highlightbackground="#DC3545", highlightthickness=2)
+        except Exception:
+            pass
+
+
+def validate_required_fields(fields_dict, parent=None):
+    """
+    Valida campos obligatorios.
+    fields_dict: {campo_nombre: (widget_entry, valor)}
+    Retorna (bool, lista_campos_faltantes)
+    """
+    missing = []
+    for name, (entry, value) in fields_dict.items():
+        if not str(value).strip():
+            missing.append(name)
+            highlight_required_field(entry, False)
+        else:
+            highlight_required_field(entry, True)
+
+    if missing and parent:
+        messagebox.showwarning(
+            "Campos obligatorios",
+            "Los siguientes campos son obligatorios:\n• " + "\n• ".join(missing),
+            parent=parent,
+        )
+    return len(missing) == 0, missing
 
 
 def validate_today_or_future(date_text, parent=None, field_name="Fecha"):

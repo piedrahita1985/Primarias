@@ -5,9 +5,10 @@ from config.config import COLORS
 from logica import entradas_mov_logica as ent
 from logica import inventario_mov_logica as inv
 from logica import movimientos_common as common
+from UI._base_movimientos import MovimientosBase
 from UI._mov_utils import (
-    attach_treeview_sorting,
     apply_default_window,
+    attach_treeview_sorting,
     draw_title,
     get_date_value,
     make_date_input,
@@ -15,8 +16,11 @@ from UI._mov_utils import (
     make_labeled_entry,
     only_numeric,
     upper_text_var,
+    validate_required_fields,
     validate_today_or_future,
 )
+from UI._searchable_treeview import SearchableTreeview
+from UI._smart_combobox import SmartCodeCombobox
 
 
 def open_window(master):
@@ -79,13 +83,10 @@ class _ChecklistDialog(tk.Toplevel):
         EntradasWindow(self.master)
 
 
-class EntradasWindow(tk.Toplevel):
+class EntradasWindow(MovimientosBase):
     def __init__(self, master, prefill=None):
-        super().__init__(master)
+        super().__init__(master, "Sistema de Gestion - Entradas")
         self._prefill = prefill
-        self.username = getattr(master, "username", "SISTEMA")
-        self.title("Sistema de Gestion - Entradas")
-        self.configure(bg=COLORS["secondary"])
         apply_default_window(self, min_width=1100, min_height=700)
 
         self._maestras = common.cargar_maestras()
@@ -131,8 +132,9 @@ class EntradasWindow(tk.Toplevel):
         self.v_lote = tk.StringVar()
         self.v_catalogo = tk.StringVar()
         self.v_cantidad = tk.StringVar()
-        self.v_presentacion = tk.StringVar()
-        self.v_total_neto = tk.StringVar()
+        # Renombradas para mayor claridad semántica:
+        self.v_contenido_por_unidad = tk.StringVar()   # antes: v_presentacion
+        self.v_contenido_total = tk.StringVar()         # antes: v_total_neto
         self.v_unidad = tk.StringVar()
         self.v_potencia = tk.StringVar()
         self.v_costo_unitario = tk.StringVar()
@@ -162,39 +164,26 @@ class EntradasWindow(tk.Toplevel):
     def _build_ui(self):
         draw_title(self, "Sistema de Gestion - Entradas")
 
-        top = tk.Frame(self, bg=COLORS["secondary"])
-        top.pack(fill="x", expand=False, padx=10, pady=(10, 6))
-        top.grid_columnconfigure(0, weight=1)
-        top.grid_rowconfigure(0, weight=1)
+        # Notebook principal: Registro | Historial
+        main_frame = tk.Frame(self, bg=COLORS["secondary"])
+        main_frame.pack(fill="both", expand=True, padx=10, pady=(8, 0))
 
-        right = tk.LabelFrame(
-            top,
-            text="  Registro de entrada  ",
-            bg=COLORS["secondary"],
-            fg=COLORS["text_dark"],
-            font=("Segoe UI", 9, "bold"),
-        )
-        right.grid(row=0, column=0, sticky="nsew")
-        right.grid_rowconfigure(0, weight=1)
-        right.grid_columnconfigure(0, weight=1)
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill="both", expand=True)
 
-        canvas = tk.Canvas(right, bg=COLORS["secondary"], highlightthickness=0)
-        self._form_canvas = canvas
-        ysb = tk.Scrollbar(right, orient="vertical", command=canvas.yview)
-        form = tk.Frame(canvas, bg=COLORS["secondary"])
+        tab_registro = tk.Frame(self.notebook, bg=COLORS["secondary"])
+        tab_historial = tk.Frame(self.notebook, bg=COLORS["secondary"])
 
-        form.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        win_id = canvas.create_window((0, 0), window=form, anchor="nw")
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win_id, width=e.width))
-        canvas.configure(yscrollcommand=ysb.set)
+        self.notebook.add(tab_registro, text="  📝 Registro de Entrada  ")
+        self.notebook.add(tab_historial, text="  📋 Historial  ")
 
-        canvas.grid(row=0, column=0, sticky="nsew")
-        ysb.grid(row=0, column=1, sticky="ns")
+        self._build_registro_tab(tab_registro)
+        self._build_historial_tab(tab_historial)
 
-        self._build_sections(form)
-
+        # Barra inferior de estado y acciones
         bar = tk.Frame(self, bg=COLORS["secondary"])
-        bar.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+        bar.pack(side="bottom", fill="x", padx=10, pady=(4, 10))
+
         self.lbl_status = tk.Label(
             bar,
             text="Listo para registrar entrada.",
@@ -204,68 +193,129 @@ class EntradasWindow(tk.Toplevel):
             anchor="w",
         )
         self.lbl_status.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self._button(bar, "Salir", "#6C757D", self.destroy).pack(side="right")
-        self._button(bar, "Guardar", COLORS["primary"], self._save).pack(side="right", padx=(0, 6))
-        self._button(bar, "Nuevo", "#6C757D", self._clear_form).pack(side="left", padx=(0, 6))
 
-        self._build_history()
+        btn_salir = self._button(bar, "Salir", "#6C757D", self.destroy)
+        btn_salir.pack(side="right")
+        self._add_tooltip(btn_salir, "Cerrar ventana (Esc)")
 
-    def _build_history(self):
-        hist = tk.LabelFrame(
-            self,
-            text="  Historial de Entradas  ",
+        btn_guardar = self._button(bar, "Guardar  Ctrl+G", COLORS["primary"], self._save)
+        btn_guardar.pack(side="right", padx=(0, 6))
+        self._add_tooltip(btn_guardar, "Guardar entrada (Ctrl+G)")
+
+        btn_nuevo = self._button(bar, "Nuevo", "#6C757D", self._clear_form)
+        btn_nuevo.pack(side="left", padx=(0, 6))
+        self._add_tooltip(btn_nuevo, "Limpiar formulario")
+
+        btn_refrescar = self._button(bar, "Refrescar  F5", "#17A2B8", self._refresh_all)
+        btn_refrescar.pack(side="left", padx=(0, 6))
+        self._add_tooltip(btn_refrescar, "Recargar datos maestros y historial (F5)")
+
+    def _build_registro_tab(self, parent):
+        """Formulario de registro con scroll."""
+        canvas = tk.Canvas(parent, bg=COLORS["secondary"], highlightthickness=0)
+        self._form_canvas = canvas
+        ysb = tk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        form = tk.Frame(canvas, bg=COLORS["secondary"])
+
+        form.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        win_id = canvas.create_window((0, 0), window=form, anchor="nw")
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfigure(win_id, width=e.width),
+        )
+        canvas.configure(yscrollcommand=ysb.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        ysb.pack(side="right", fill="y")
+
+        self._build_sections(form)
+
+    def _build_historial_tab(self, parent):
+        """Historial con filtros y paginación real."""
+        _e_style = dict(
+            bg=COLORS["surface"],
+            fg=COLORS["text_dark"],
+            font=("Segoe UI", 10),
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["border_soft"],
+            highlightcolor=COLORS["primary"],
+        )
+
+        # Filtros
+        filter_frame = tk.LabelFrame(
+            parent,
+            text="  Filtros  ",
             bg=COLORS["secondary"],
             fg=COLORS["primary_dark"],
             font=("Segoe UI", 10, "bold"),
         )
-        hist.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        filter_frame.pack(fill="x", padx=6, pady=(6, 4))
 
-        ftop = tk.Frame(hist, bg=COLORS["secondary"])
-        ftop.pack(fill="x", padx=6, pady=(6, 4))
-        _e_style = dict(bg=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 10),
-                        relief="flat", bd=0, highlightthickness=1,
-                        highlightbackground=COLORS["border_soft"], highlightcolor=COLORS["primary"])
+        row_f = tk.Frame(filter_frame, bg=COLORS["secondary"])
+        row_f.pack(fill="x", padx=6, pady=6)
+
         def _lbl(t):
-            return tk.Label(ftop, text=t, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold"))
+            return tk.Label(row_f, text=t, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold"))
+
         _lbl("Desde:").pack(side="left", padx=(0, 3))
-        self.h_w_desde = make_date_widget(ftop)
+        self.h_w_desde = make_date_widget(row_f)
         self.h_w_desde.pack(side="left", padx=(0, 10))
+
         _lbl("Hasta:").pack(side="left", padx=(0, 3))
-        self.h_w_hasta = make_date_widget(ftop)
+        self.h_w_hasta = make_date_widget(row_f)
         self.h_w_hasta.pack(side="left", padx=(0, 10))
-        _lbl("Codigo:").pack(side="left", padx=(0, 3))
-        tk.Entry(ftop, textvariable=self.h_codigo, width=10, **_e_style).pack(side="left", padx=(0, 10))
+
+        _lbl("Código:").pack(side="left", padx=(0, 3))
+        tk.Entry(row_f, textvariable=self.h_codigo, width=10, **_e_style).pack(side="left", padx=(0, 10))
+
         _lbl("Lote:").pack(side="left", padx=(0, 3))
-        tk.Entry(ftop, textvariable=self.h_lote, width=10, **_e_style).pack(side="left", padx=(0, 10))
-        self._button(ftop, "Filtrar", COLORS["primary"], self._apply_filters).pack(side="left", padx=(0, 6))
-        self._button(ftop, "Borrar filtros", "#B0B0B0", self._clear_filters).pack(side="left")
+        tk.Entry(row_f, textvariable=self.h_lote, width=10, **_e_style).pack(side="left", padx=(0, 10))
+
+        btn_row = tk.Frame(filter_frame, bg=COLORS["secondary"])
+        btn_row.pack(fill="x", padx=6, pady=(0, 6))
+        self._button(btn_row, "Filtrar", COLORS["primary"], self._apply_filters).pack(side="left", padx=(0, 6))
+        self._button(btn_row, "Borrar filtros", "#B0B0B0", self._clear_filters).pack(side="left")
+
+        # Tabla
+        table_frame = tk.Frame(parent, bg=COLORS["secondary"])
+        table_frame.pack(fill="both", expand=True, padx=6, pady=4)
 
         cols = ("id", "fecha", "codigo", "nombre", "lote", "total", "unidad", "estado")
-        self.h_tree = ttk.Treeview(hist, columns=cols, show="headings", height=8)
+        self.h_tree = SearchableTreeview(
+            table_frame, columns=cols,
+            search_columns=["codigo", "nombre", "lote"],
+            height=10,
+        )
         for key, title, width in [
-            ("id", "ID", 60),
-            ("fecha", "Fecha", 110),
-            ("codigo", "Codigo", 90),
+            ("id",     "ID",     60),
+            ("fecha",  "Fecha",  110),
+            ("codigo", "Código", 90),
             ("nombre", "Nombre", 290),
-            ("lote", "Lote", 100),
-            ("total", "Total", 90),
+            ("lote",   "Lote",   100),
+            ("total",  "Total",  90),
             ("unidad", "Unidad", 80),
             ("estado", "Estado", 90),
         ]:
             self.h_tree.heading(key, text=title)
             self.h_tree.column(key, width=width, anchor="center")
-        attach_treeview_sorting(self.h_tree)
-        self.h_tree.pack(fill="both", expand=True, padx=6)
+        attach_treeview_sorting(self.h_tree.tree)
+        self.h_tree.pack(fill="both", expand=True)
 
-        ysb = ttk.Scrollbar(hist, orient="vertical", command=self.h_tree.yview)
-        self.h_tree.configure(yscrollcommand=ysb.set)
-        ysb.place(relx=0.996, rely=0.22, relheight=0.58, anchor="ne")
+        # Paginación
+        pag_frame = self._build_pagination_controls(parent)
+        pag_frame.pack(fill="x", padx=6, pady=4)
 
-        fbot = tk.Frame(hist, bg=COLORS["secondary"])
-        fbot.pack(fill="x", padx=6, pady=6)
-        self._button(fbot, "Editar seleccionado", COLORS["primary_dark"], self._edit_selected).pack(side="left", padx=(0, 6))
-        self._button(fbot, "Anular seleccionado", COLORS["error"], self._cancel_selected).pack(side="left")
-        self._button(fbot, "Actualizar", "#BDBDBD", self._load_history_default).pack(side="right")
+        # Acciones
+        action_frame = tk.Frame(parent, bg=COLORS["secondary"])
+        action_frame.pack(fill="x", padx=6, pady=(0, 6))
+        self._button(action_frame, "Editar seleccionado", COLORS["primary_dark"], self._edit_selected).pack(side="left", padx=(0, 6))
+        self._button(action_frame, "Anular seleccionado", COLORS["error"], self._cancel_selected).pack(side="left")
+        self._button(action_frame, "Actualizar", "#BDBDBD", self._load_history_default).pack(side="right")
 
     def _build_sections(self, parent):
         sec1 = self._section(parent, "Informacion General")
@@ -279,10 +329,9 @@ class EntradasWindow(tk.Toplevel):
         self.cb_tipo_entrada.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 8))
 
         tk.Label(sec1, text="Codigo de Uso", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=2, sticky="w", padx=8, pady=(6, 2))
-        self.cb_codigo = ttk.Combobox(sec1, textvariable=self.v_codigo, values=self._sustancias_codigos, state="normal", font=("Segoe UI", 10))
+        self.cb_codigo = SmartCodeCombobox(sec1, self._sustancias_by_codigo, state="normal", font=("Segoe UI", 10))
         self.cb_codigo.grid(row=1, column=2, sticky="ew", padx=8, pady=(0, 8))
-        self.cb_codigo.bind("<KeyRelease>", self._on_codigo_key)
-        self.cb_codigo.bind("<<ComboboxSelected>>", self._on_codigo_selected)
+        self.cb_codigo.bind("<<SmartCodeSelected>>", self._on_codigo_selected)
         self.cb_codigo.bind("<FocusOut>", self._on_codigo_focusout)
 
         tk.Label(sec1, text="Lote", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=3, sticky="w", padx=8, pady=(6, 2))
@@ -315,9 +364,9 @@ class EntradasWindow(tk.Toplevel):
         for c in range(5):
             sec2.grid_columnconfigure(c, weight=1)
 
-        e_cantidad = make_labeled_entry(sec2, "Cantidad", self.v_cantidad, 0, 0)
-        e_present = make_labeled_entry(sec2, "Presentacion", self.v_presentacion, 0, 1)
-        make_labeled_entry(sec2, "Total (contenido neto)", self.v_total_neto, 0, 2, read_only=True)
+        e_cantidad = make_labeled_entry(sec2, "Cantidad (envases)", self.v_cantidad, 0, 0)
+        e_present = make_labeled_entry(sec2, "Contenido por envase", self.v_contenido_por_unidad, 0, 1)
+        make_labeled_entry(sec2, "Contenido total (auto)", self.v_contenido_total, 0, 2, read_only=True)
 
         tk.Label(sec2, text="Unidad", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=3, sticky="w", padx=8, pady=(6, 2))
         self.cb_unidad = ttk.Combobox(sec2, textvariable=self.v_unidad, values=[u.get("unidad", "") for u in self._maestras["unidades"] if u.get("unidad")], state="readonly", font=("Segoe UI", 10))
@@ -341,8 +390,8 @@ class EntradasWindow(tk.Toplevel):
             sec3.grid_columnconfigure(c, weight=1)
 
         e_costo_u = make_labeled_entry(sec3, "Costo Unitario", self.v_costo_unitario, 0, 0, width=14)
-        make_labeled_entry(sec3, "Costo Total", self.v_costo_total, 0, 1, width=14, read_only=True)
-        make_labeled_entry(sec3, "Factura", self.v_factura, 0, 2, width=14)
+        make_labeled_entry(sec3, "Costo Total (auto)", self.v_costo_total, 0, 1, width=14, read_only=True)
+        make_labeled_entry(sec3, "Factura/OC", self.v_factura, 0, 2, width=14)
 
         sec4 = self._section(parent, "Documentacion Tecnica")
         for c in range(4):
@@ -413,8 +462,8 @@ class EntradasWindow(tk.Toplevel):
         for e in [e_cantidad, e_present, e_costo_u]:
             e.bind("<KeyPress>", only_numeric)
 
-        self.v_cantidad.trace_add("write", lambda *_: self._update_total_neto())
-        self.v_presentacion.trace_add("write", lambda *_: self._update_total_neto())
+        self.v_cantidad.trace_add("write", lambda *_: self._update_contenido_total())
+        self.v_contenido_por_unidad.trace_add("write", lambda *_: self._update_contenido_total())
         self.v_cantidad.trace_add("write", lambda *_: self._update_costo_total())
         self.v_costo_unitario.trace_add("write", lambda *_: self._update_costo_total())
 
@@ -426,9 +475,22 @@ class EntradasWindow(tk.Toplevel):
         return frame
 
     def _button(self, parent, text, bg, cmd):
-        return tk.Button(parent, text=text, bg=bg, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", bd=0, padx=12, pady=6, cursor="hand2", command=cmd)
+        return tk.Button(
+            parent,
+            text=text,
+            bg=bg,
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            command=cmd,
+        )
 
     def _set_status(self, text, is_error=False):
+        """Compatibilidad: actualiza la etiqueta de estado."""
         if hasattr(self, "lbl_status"):
             self.lbl_status.configure(
                 text=text,
@@ -456,14 +518,17 @@ class EntradasWindow(tk.Toplevel):
         except ValueError:
             self.v_costo_total.set("0")
 
-    def _update_total_neto(self):
+    def _update_contenido_total(self):
+        """Contenido total = cantidad × contenido_por_unidad."""
         try:
             cantidad = float((self.v_cantidad.get() or "0").replace(",", "."))
-            presentacion = float((self.v_presentacion.get() or "0").replace(",", "."))
+            contenido = float((self.v_contenido_por_unidad.get() or "0").replace(",", "."))
+            total = cantidad * contenido
+            self.v_contenido_total.set(
+                f"{total:.4f}".rstrip("0").rstrip(".") if total else "0"
+            )
         except ValueError:
-            self.v_total_neto.set("")
-            return
-        self.v_total_neto.set(self._fmt_num(cantidad * presentacion))
+            self.v_contenido_total.set("0")
 
     @staticmethod
     def _fmt_num(value):
@@ -482,7 +547,7 @@ class EntradasWindow(tk.Toplevel):
             return
         codigo = data.get("codigo", "")
         if codigo and codigo in self._sustancias_by_codigo:
-            self.v_codigo.set(codigo)
+            self.cb_codigo.set_by_codigo(codigo) if hasattr(self.cb_codigo, 'set_by_codigo') else self.v_codigo.set(codigo)
             self._fill_sustancia(codigo)
         if data.get("lote"):
             self.v_lote.set(data["lote"])
@@ -496,7 +561,7 @@ class EntradasWindow(tk.Toplevel):
             self.v_ficha_seg.set(True)
 
     def _on_codigo_key(self, event=None):
-        typed = self.v_codigo.get().strip()
+        typed = self.cb_codigo.get_codigo().strip() if hasattr(self.cb_codigo, 'get_codigo') else self.v_codigo.get().strip()
         ordered = self._ordered_codes(typed)
         self.cb_codigo.configure(values=ordered)
         if not typed:
@@ -521,10 +586,11 @@ class EntradasWindow(tk.Toplevel):
             self._fill_sustancia(match)
 
     def _on_codigo_selected(self, _event=None):
-        self._fill_sustancia(self.v_codigo.get().strip())
+        codigo = self.cb_codigo.get_codigo().strip() if hasattr(self.cb_codigo, 'get_codigo') else self.v_codigo.get().strip()
+        self._fill_sustancia(codigo)
 
     def _on_codigo_focusout(self, _event=None):
-        codigo = self.v_codigo.get().strip()
+        codigo = self.cb_codigo.get_codigo().strip() if hasattr(self.cb_codigo, 'get_codigo') else self.v_codigo.get().strip()
         if codigo in self._sustancias_by_codigo:
             self._fill_sustancia(codigo)
             return
@@ -647,120 +713,135 @@ class EntradasWindow(tk.Toplevel):
             var.set(value or "")
 
     def _save(self):
-        codigo = self.v_codigo.get().strip()
-        sustancia = self._sustancias_by_codigo.get(codigo)
-        if sustancia is None:
-            self._warn("Seleccione un codigo de uso valido.")
-            return
+        self._show_progress(True)
+        self.after(10, self._do_save)
 
-        if not self.v_lote.get().strip() or not self.v_catalogo.get().strip() or not self.v_cantidad.get().strip():
-            self._warn("Lote, catalogo y cantidad son obligatorios.")
-            return
-
+    def _do_save(self):
         try:
-            cantidad = float(self.v_cantidad.get().replace(",", "."))
-        except ValueError:
-            self._warn("Cantidad invalida.")
-            return
-        if cantidad <= 0:
-            self._warn("La cantidad debe ser mayor a 0.")
-            return
-
-        try:
-            presentacion = float((self.v_presentacion.get() or "0").replace(",", "."))
-        except ValueError:
-            self._warn("Presentacion invalida.")
-            return
-
-        if presentacion <= 0:
-            self._warn("La presentacion debe ser mayor a 0.")
-            return
-
-        fecha_vencimiento = get_date_value(self.w_fecha_venc)
-        if not validate_today_or_future(fecha_vencimiento, parent=self, field_name="Fecha de vencimiento"):
-            return
-
-        if self._editing_id is not None:
-            ya_salida = ent.total_salidas_activas(self._editing_id)
-            if cantidad < ya_salida:
-                messagebox.showwarning(
-                    "Aviso",
-                    f"La cantidad no puede ser menor que lo ya retirado ({ya_salida}).",
-                    parent=self,
-                )
+            codigo = self.cb_codigo.get_codigo().strip() if hasattr(self.cb_codigo, 'get_codigo') else self.v_codigo.get().strip()
+            sustancia = self._sustancias_by_codigo.get(codigo)
+            if sustancia is None:
+                self._warn("Seleccione un codigo de uso valido.")
                 return
 
-        unidad = self.v_unidad.get().strip()
-        if not unidad:
-            self._warn("Seleccione la unidad.")
-            return
+            if not self.v_lote.get().strip() or not self.v_catalogo.get().strip() or not self.v_cantidad.get().strip():
+                self._warn("Lote, catalogo y cantidad son obligatorios.")
+                return
 
-        unidad_id = None
-        for u in self._maestras["unidades"]:
-            if u.get("unidad", "") == unidad:
-                unidad_id = u.get("id")
-                break
-        if unidad_id is None:
-            self._warn("Unidad invalida.")
-            return
+            try:
+                cantidad = float(self.v_cantidad.get().replace(",", "."))
+            except ValueError:
+                self._warn("Cantidad invalida.")
+                return
+            if cantidad <= 0:
+                self._warn("La cantidad debe ser mayor a 0.")
+                return
 
-        tipo_entrada_id = None
-        for t in self._maestras["tipos_entrada"]:
-            if t.get("tipo_entrada", "") == self.v_tipo_entrada.get().strip():
-                tipo_entrada_id = t.get("id")
-                break
-        if tipo_entrada_id is None:
-            self._warn("Seleccione un tipo de entrada valido.")
-            return
+            try:
+                presentacion = float((self.v_contenido_por_unidad.get() or "0").replace(",", "."))
+            except ValueError:
+                self._warn("Contenido por envase invalido.")
+                return
 
-        id_ubicacion = self._selected_id_ubicacion()
-        if id_ubicacion is None:
-            self._warn("Seleccione Ubicación y No. Caja válidos.")
-            return
+            if presentacion <= 0:
+                self._warn("El contenido por envase debe ser mayor a 0.")
+                return
 
-        propiedad = str(sustancia.get("propiedad", "")).strip().upper()
-        fabricante = self._fabricantes_by_nombre.get(propiedad)
+            fecha_vencimiento = get_date_value(self.w_fecha_venc)
+            if not validate_today_or_future(fecha_vencimiento, parent=self, field_name="Fecha de vencimiento"):
+                return
 
-        record = {
-            "fecha_entrada": get_date_value(self.w_fecha_entrada),
-            "id_tipo_entrada": tipo_entrada_id,
-            "id_sustancia": sustancia.get("id"),
-            "id_fabricante": fabricante.get("id") if fabricante else None,
-            "lote": self.v_lote.get().strip(),
-            "catalogo": self.v_catalogo.get().strip(),
-            "cantidad": cantidad,
-            "presentacion": presentacion,
-            "total_contenido": cantidad * presentacion,
-            "id_unidad": unidad_id,
-            "potencia": self.v_potencia.get().strip(),
-            "costo_unitario": float((self.v_costo_unitario.get() or "0").replace(",", ".")),
-            "costo_total": float((self.v_costo_total.get() or "0").replace(",", ".")),
-            "factura": self.v_factura.get().strip(),
-            "certificado_anl": self.v_cert_anl.get(),
-            "ficha_seguridad": self.v_ficha_seg.get(),
-            "factura_compra": self.v_factura_compra.get(),
-            "fecha_vencimiento": fecha_vencimiento,
-            "id_ubicacion": id_ubicacion,
-            "id_condicion_alm": self._id_from_display(self._cond_values, self.v_condicion.get().strip()),
-            "id_color_refuerzo": self._id_from_display(self._color_values, self.v_color_refuerzo.get().strip()),
-            "observaciones": self.txt_obs.get("1.0", "end-1c").strip(),
-        }
+            if self._editing_id is not None:
+                ya_salida = ent.total_salidas_activas(self._editing_id)
+                if cantidad < ya_salida:
+                    messagebox.showwarning(
+                        "Aviso",
+                        f"La cantidad no puede ser menor que lo ya retirado ({ya_salida}).",
+                        parent=self,
+                    )
+                    return
 
-        if self._editing_id is None:
-            ent.agregar(record, usuario=self.username)
-            self._set_status("Entrada guardada correctamente.")
-            messagebox.showinfo("Exito", "Entrada guardada correctamente.", parent=self)
-        else:
-            ent.actualizar(self._editing_id, record, usuario=self.username)
-            self._set_status("Entrada actualizada correctamente.")
-            messagebox.showinfo("Exito", "Entrada actualizada correctamente.", parent=self)
+            unidad = self.v_unidad.get().strip()
+            if not unidad:
+                self._warn("Seleccione la unidad.")
+                return
 
-        self._refresh_list()
-        self._load_history_default()
-        self._clear_form()
+            unidad_id = None
+            for u in self._maestras["unidades"]:
+                if u.get("unidad", "") == unidad:
+                    unidad_id = u.get("id")
+                    break
+            if unidad_id is None:
+                self._warn("Unidad invalida.")
+                return
+
+            tipo_entrada_id = None
+            for t in self._maestras["tipos_entrada"]:
+                if t.get("tipo_entrada", "") == self.v_tipo_entrada.get().strip():
+                    tipo_entrada_id = t.get("id")
+                    break
+            if tipo_entrada_id is None:
+                self._warn("Seleccione un tipo de entrada valido.")
+                return
+
+            id_ubicacion = self._selected_id_ubicacion()
+            if id_ubicacion is None:
+                self._warn("Seleccione Ubicación y No. Caja válidos.")
+                return
+
+            propiedad = str(sustancia.get("propiedad", "")).strip().upper()
+            fabricante = self._fabricantes_by_nombre.get(propiedad)
+
+            record = {
+                "fecha_entrada": get_date_value(self.w_fecha_entrada),
+                "id_tipo_entrada": tipo_entrada_id,
+                "id_sustancia": sustancia.get("id"),
+                "id_fabricante": fabricante.get("id") if fabricante else None,
+                "lote": self.v_lote.get().strip(),
+                "catalogo": self.v_catalogo.get().strip(),
+                "cantidad": cantidad,
+                "presentacion": presentacion,           # clave de BD sin cambios
+                "total_contenido": cantidad * presentacion,
+                "id_unidad": unidad_id,
+                "potencia": self.v_potencia.get().strip(),
+                "costo_unitario": float((self.v_costo_unitario.get() or "0").replace(",", ".")),
+                "costo_total": float((self.v_costo_total.get() or "0").replace(",", ".")),
+                "factura": self.v_factura.get().strip(),
+                "certificado_anl": self.v_cert_anl.get(),
+                "ficha_seguridad": self.v_ficha_seg.get(),
+                "factura_compra": self.v_factura_compra.get(),
+                "fecha_vencimiento": fecha_vencimiento,
+                "id_ubicacion": id_ubicacion,
+                "id_condicion_alm": self._id_from_display(
+                    self._cond_values, self.v_condicion.get().strip()
+                ),
+                "id_color_refuerzo": self._id_from_display(
+                    self._color_values, self.v_color_refuerzo.get().strip()
+                ),
+                "observaciones": self.txt_obs.get("1.0", "end-1c").strip(),
+            }
+
+            if self._editing_id is None:
+                ent.agregar(record, usuario=self.username)
+                self._show_status("Entrada guardada correctamente.", is_success=True)
+                messagebox.showinfo("Exito", "Entrada guardada correctamente.", parent=self)
+            else:
+                ent.actualizar(self._editing_id, record, usuario=self.username)
+                self._show_status("Entrada actualizada correctamente.", is_success=True)
+                messagebox.showinfo("Exito", "Entrada actualizada correctamente.", parent=self)
+
+            self._refresh_list()
+            self._load_history_default()
+            self._clear_form()
+        except Exception as e:
+            self._show_status(f"Error: {e}", is_error=True)
+            messagebox.showerror("Error", str(e), parent=self)
+        finally:
+            self._show_progress(False)
 
     def _clear_form(self):
         self._editing_id = None
+        self.cb_codigo.set("") if hasattr(self.cb_codigo, 'set_by_codigo') else None
         for v in [
             self.v_codigo,
             self.v_nombre,
@@ -769,8 +850,8 @@ class EntradasWindow(tk.Toplevel):
             self.v_lote,
             self.v_catalogo,
             self.v_cantidad,
-            self.v_presentacion,
-            self.v_total_neto,
+            self.v_contenido_por_unidad,
+            self.v_contenido_total,
             self.v_unidad,
             self.v_potencia,
             self.v_costo_unitario,
@@ -793,6 +874,30 @@ class EntradasWindow(tk.Toplevel):
 
     def _refresh_list(self):
         return
+
+    # ------------------------------------------------------------------
+    # Refrescar todo (F5)
+    # ------------------------------------------------------------------
+    def _refresh_all(self):
+        self._show_progress(True)
+        self.after(10, self._do_refresh_all)
+
+    def _do_refresh_all(self):
+        try:
+            self._maestras = common.cargar_maestras()
+            self._sustancias_by_codigo = common.map_sustancia_by_codigo(self._maestras["sustancias"])
+            self._sustancias_by_id = common.map_by_id(self._maestras["sustancias"])
+            self._sustancias_codigos = sorted(
+                self._sustancias_by_codigo.keys(), key=lambda x: (len(x), x)
+            )
+            self._unidades_by_id = common.map_by_id(self._maestras["unidades"])
+            self._tipos_entrada_by_id = common.map_by_id(self._maestras["tipos_entrada"])
+            self._ubicaciones_rows = list(self._maestras["ubicaciones"])
+            self._refresh_list()
+            self._load_history_default()
+            self._show_status("Datos actualizados.", is_success=True)
+        finally:
+            self._show_progress(False)
 
     def _on_mousewheel(self, event):
         if self._form_canvas is None:
@@ -823,19 +928,42 @@ class EntradasWindow(tk.Toplevel):
             pass
 
     def _load_history_default(self):
-        rows = ent.ultimas_15(self._maestras)
-        self._fill_history(rows)
+        self._current_page = 1
+        self._load_page()
+
+    def _load_page(self):
+        """Carga la página actual del historial aplicando filtros activos."""
+        self._show_progress(True)
+        self.after(10, self._do_load_page)
+
+    def _do_load_page(self):
+        try:
+            all_rows = ent.filtrar(
+                fecha="",
+                fecha_desde=get_date_value(self.h_w_desde),
+                fecha_hasta=get_date_value(self.h_w_hasta),
+                codigo=self.h_codigo.get().strip(),
+                lote=self.h_lote.get().strip(),
+                maestras=self._maestras,
+            )
+            self._total_records = len(all_rows)
+            self._total_pages = max(
+                1, (self._total_records + self._page_size - 1) // self._page_size
+            )
+            if self._current_page > self._total_pages:
+                self._current_page = self._total_pages
+
+            start = (self._current_page - 1) * self._page_size
+            page_rows = all_rows[start : start + self._page_size]
+
+            self._fill_history(page_rows)
+            self._update_pagination_buttons()
+        finally:
+            self._show_progress(False)
 
     def _apply_filters(self):
-        rows = ent.filtrar(
-            fecha="",
-            fecha_desde=get_date_value(self.h_w_desde),
-            fecha_hasta=get_date_value(self.h_w_hasta),
-            codigo=self.h_codigo.get().strip(),
-            lote=self.h_lote.get().strip(),
-            maestras=self._maestras,
-        )
-        self._fill_history(rows)
+        self._current_page = 1
+        self._load_page()
 
     def _clear_filters(self):
         self._set_date_widget(self.h_w_desde, "")
@@ -845,7 +973,7 @@ class EntradasWindow(tk.Toplevel):
         self._load_history_default()
 
     def _fill_history(self, rows):
-        self.h_tree.delete(*self.h_tree.get_children())
+        self.h_tree.clear()
         for r in rows:
             self.h_tree.insert(
                 "",
@@ -885,6 +1013,9 @@ class EntradasWindow(tk.Toplevel):
             messagebox.showwarning("Aviso", "No se puede editar una entrada anulada.", parent=self)
             return
 
+        # Cambiar a pestaña de registro para edición visible
+        self.notebook.select(0)
+
         self._editing_id = id_entrada
         sust = self._sustancias_by_id.get(rec.get("id_sustancia"), {})
         self.v_codigo.set(str(sust.get("codigo", "")))
@@ -897,8 +1028,8 @@ class EntradasWindow(tk.Toplevel):
         self.v_lote.set(rec.get("lote", ""))
         self.v_catalogo.set(rec.get("catalogo", ""))
         self.v_cantidad.set(str(rec.get("cantidad", "")))
-        self.v_presentacion.set(rec.get("presentacion", ""))
-        self.v_total_neto.set(str(rec.get("total_contenido", "")))
+        self.v_contenido_por_unidad.set(str(rec.get("presentacion", "")))
+        self.v_contenido_total.set(str(rec.get("total_contenido", "")))
         self.v_potencia.set(rec.get("potencia", ""))
         self.v_costo_unitario.set(str(rec.get("costo_unitario", "")))
         self.v_costo_total.set(str(rec.get("costo_total", "")))
@@ -938,5 +1069,6 @@ class EntradasWindow(tk.Toplevel):
             return
 
         ent.anular(id_entrada, usuario=self.username)
+        self._show_status("Entrada anulada.", is_success=True)
         self._refresh_list()
         self._load_history_default()

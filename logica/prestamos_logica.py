@@ -191,13 +191,31 @@ def responder_prestamo(id_prestamo, id_usuario_recibe, aceptar, observacion_reci
             salida = sal.agregar(record_salida, usuario=usuario_accion)
             id_salida = salida.get("id")
 
-        db.responder_prestamo(
-            id_prestamo=id_prestamo,
-            id_usuario_recibe=id_usuario_recibe,
-            aceptar=aceptar,
-            obs=_normalize_obs(observacion_recibo),
-            id_salida=id_salida,
-        )
+        raw = db._conn
+        committed = False
+        try:
+            raw.execute("BEGIN IMMEDIATE")
+            # Re-check inside the lock to prevent double-processing
+            rows = list(raw.execute("SELECT estado_recepcion FROM prestamos WHERE id=?", (id_prestamo,)))
+            if not rows or str(rows[0][0]).upper() != "PENDIENTE":
+                raw.execute("ROLLBACK")
+                return False, "Este préstamo ya fue respondido (actualización concurrente)."
+            db.responder_prestamo(
+                id_prestamo=id_prestamo,
+                id_usuario_recibe=id_usuario_recibe,
+                aceptar=aceptar,
+                obs=_normalize_obs(observacion_recibo),
+                id_salida=id_salida,
+            )
+            raw.execute("COMMIT")
+            committed = True
+        except Exception:
+            if not committed:
+                try:
+                    raw.execute("ROLLBACK")
+                except Exception:
+                    pass
+            raise
 
         nuevo_estado = "RECIBIDO" if aceptar else "RECHAZADO"
         bit.registrar_campos(

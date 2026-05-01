@@ -4,6 +4,7 @@ from tkinter import ttk
 from config.config import COLORS
 from logica import inventario_mov_logica as inv
 from UI._mov_utils import apply_default_window, attach_treeview_sorting, draw_title
+from UI._searchable_treeview import SearchableTreeview
 
 
 COLUMNS = [
@@ -46,6 +47,11 @@ class InventarioWindow(tk.Toplevel):
         apply_default_window(self, min_width=1100, min_height=700)
         self._tooltip = None
         self._refresh_job = None
+        self._all_rows = []
+        self._current_page = 1
+        self._page_size = 50
+        self._total_pages = 1
+        self._total_records = 0
 
         draw_title(self, "Sistema de Gestion - Inventario")
 
@@ -72,14 +78,12 @@ class InventarioWindow(tk.Toplevel):
         table_frame.grid_rowconfigure(0, weight=1)
         table_frame.grid_columnconfigure(0, weight=1)
 
-        self.tree = ttk.Treeview(table_frame, columns=[c[0] for c in COLUMNS], show="headings")
-        self.tree.grid(row=0, column=0, sticky="nsew")
-
-        ysb = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
-        xsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
-        ysb.grid(row=0, column=1, sticky="ns")
-        xsb.grid(row=1, column=0, sticky="ew")
+        self.tree = SearchableTreeview(
+            table_frame,
+            columns=[c[0] for c in COLUMNS],
+            search_columns=["codigo", "nombre", "lote", "ubicacion"],
+        )
+        self.tree.pack(fill="both", expand=True)
 
         style = ttk.Style(self)
         style.configure("Treeview", rowheight=25, font=("Segoe UI", 9))
@@ -88,24 +92,50 @@ class InventarioWindow(tk.Toplevel):
         for key, title, width in COLUMNS:
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, anchor="center")
-        attach_treeview_sorting(self.tree)
+        attach_treeview_sorting(self.tree.tree)
 
         self.tree.tag_configure("vencido", background="#FFD6D6")
         self.tree.tag_configure("proximo", background="#FFF3CD")
         self.tree.tag_configure("ok", background="#DFF7E2")
         self.tree.tag_configure("stock_bajo", background="#EBD8FF")
 
-        self.tree.bind("<Motion>", self._on_tree_motion)
-        self.tree.bind("<Leave>", lambda _e: self._hide_tooltip())
+        self.tree.tree.bind("<Motion>", self._on_tree_motion)
+        self.tree.tree.bind("<Leave>", lambda _e: self._hide_tooltip())
         self.bind("<Destroy>", self._on_destroy)
+
+        # Pagination controls (built before first _load_data call)
+        pag_frame = tk.Frame(wrap, bg=COLORS["secondary"])
+        pag_frame.pack(fill="x", pady=(4, 0))
+
+        btn_style = dict(bg=COLORS["primary"], fg="white", font=("Segoe UI", 9, "bold"),
+                         relief="flat", bd=0, padx=8, pady=3, cursor="hand2")
+        self.btn_pag_prev = tk.Button(pag_frame, text="< Anterior",
+                                      command=self._prev_page, **btn_style)
+        self.btn_pag_prev.pack(side="left", padx=2)
+        self.lbl_page = tk.Label(pag_frame, text="Pagina 1 de 1", bg=COLORS["secondary"],
+                                 fg=COLORS["text_dark"], font=("Segoe UI", 9))
+        self.lbl_page.pack(side="left", padx=10)
+        self.btn_pag_next = tk.Button(pag_frame, text="Siguiente >",
+                                      command=self._next_page, **btn_style)
+        self.btn_pag_next.pack(side="left", padx=2)
+        tk.Label(pag_frame, text="Mostrar:", bg=COLORS["secondary"], fg=COLORS["text_dark"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=(15, 4))
+        self.combo_page_size = ttk.Combobox(pag_frame, values=[25, 50, 100, 200],
+                                            state="readonly", width=6, font=("Segoe UI", 9))
+        self.combo_page_size.set("50")
+        self.combo_page_size.bind("<<ComboboxSelected>>", self._on_page_size_change)
+        self.combo_page_size.pack(side="left", padx=2)
+        self.lbl_total_inv = tk.Label(pag_frame, text="", bg=COLORS["secondary"],
+                                      fg=COLORS["text_muted"], font=("Segoe UI", 9, "italic"))
+        self.lbl_total_inv.pack(side="left", padx=(12, 0))
 
         self._load_data()
         self._schedule_refresh()
 
     def _load_data(self):
-        self.tree.delete(*self.tree.get_children())
+        """Carga todos los datos, almacena snapshot y muestra la pagina actual."""
+        self._all_rows = []
         for row in inv.cargar_snapshot():
-            values = [row.get(c[0], "") for c in COLUMNS]
             tag = ""
             if row.get("alarma_stock") == "BAJO MINIMO":
                 tag = "stock_bajo"
@@ -115,11 +145,55 @@ class InventarioWindow(tk.Toplevel):
                 tag = "proximo"
             elif row.get("alarma_fv") == "OK":
                 tag = "ok"
+            self._all_rows.append((row, tag))
+
+        self._total_records = len(self._all_rows)
+        self._total_pages = max(1, -(-self._total_records // self._page_size))
+        if self._current_page > self._total_pages:
+            self._current_page = self._total_pages
+        self._render_page()
+
+    def _render_page(self):
+        """Muestra la pagina actual del snapshot ya cargado."""
+        self.tree.clear()
+        start = (self._current_page - 1) * self._page_size
+        page_rows = self._all_rows[start:start + self._page_size]
+        for row, tag in page_rows:
+            values = [row.get(c[0], "") for c in COLUMNS]
             self.tree.insert("", "end", values=values, tags=(tag,) if tag else ())
+        self._update_pagination_buttons()
+
+    def _prev_page(self):
+        if self._current_page > 1:
+            self._current_page -= 1
+            self._render_page()
+
+    def _next_page(self):
+        if self._current_page < self._total_pages:
+            self._current_page += 1
+            self._render_page()
+
+    def _on_page_size_change(self, _event=None):
+        try:
+            self._page_size = int(self.combo_page_size.get())
+            self._current_page = 1
+            self._total_pages = max(1, -(-self._total_records // self._page_size))
+            self._render_page()
+        except ValueError:
+            pass
+
+    def _update_pagination_buttons(self):
+        if not hasattr(self, "btn_pag_prev"):
+            return
+        self.btn_pag_prev.config(state=tk.NORMAL if self._current_page > 1 else tk.DISABLED)
+        self.btn_pag_next.config(state=tk.NORMAL if self._current_page < self._total_pages else tk.DISABLED)
+        self.lbl_page.config(text=f"Pagina {self._current_page} de {max(self._total_pages, 1)}")
+        if hasattr(self, "lbl_total_inv"):
+            self.lbl_total_inv.config(text=f"({self._total_records} registros)")
 
     def _on_tree_motion(self, event):
-        row_id = self.tree.identify_row(event.y)
-        col_id = self.tree.identify_column(event.x)
+        row_id = self.tree.tree.identify_row(event.y)
+        col_id = self.tree.tree.identify_column(event.x)
         if not row_id or not col_id:
             self._hide_tooltip()
             return
@@ -181,7 +255,6 @@ class InventarioWindow(tk.Toplevel):
             self._tooltip = None
 
     def _schedule_refresh(self):
-        # Auto-refresco para reflejar nuevas entradas/salidas sin cerrar la ventana.
         self._refresh_job = self.after(3000, self._refresh_tick)
 
     def _refresh_tick(self):

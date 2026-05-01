@@ -8,6 +8,7 @@ from config.config import COLORS
 from logica import movimientos_common as common
 from logica import prestamos_logica as prest
 from UI._mov_utils import attach_treeview_sorting, apply_default_window, draw_title, get_date_value, make_date_widget
+from UI._searchable_treeview import SearchableTreeview
 
 
 def open_window(master):
@@ -32,6 +33,11 @@ class PrestamosWindow(tk.Toplevel):
         self._lotes = []
         self._destino_users = []
         self._firma_img = None
+
+        self._emit_all_rows = []
+        self._emit_page = 1
+        self._emit_page_size = 15
+        self._emit_total = 0
 
         self._vars()
         self._build_ui()
@@ -117,6 +123,10 @@ class PrestamosWindow(tk.Toplevel):
         tk.Label(sec, text="Usuario destino", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=2, column=2, sticky="w", padx=8, pady=(6, 2))
         self.cb_destino = ttk.Combobox(sec, textvariable=self.v_destino, state="readonly", font=("Segoe UI", 10))
         self.cb_destino.grid(row=3, column=2, sticky="ew", padx=8, pady=(0, 8))
+
+        tk.Label(sec, text="Fecha limite", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=2, column=3, sticky="w", padx=8, pady=(6, 2))
+        self.w_fecha_limite = make_date_widget(sec)
+        self.w_fecha_limite.grid(row=3, column=3, sticky="ew", padx=8, pady=(0, 8))
 
         tk.Label(sec, text="Observación", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=4, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 2))
         self.txt_obs = tk.Text(sec, height=3, bg=COLORS["surface"], fg=COLORS["text_dark"], font=("Segoe UI", 10), relief="flat", bd=0, highlightthickness=1, highlightbackground=COLORS["border_soft"], highlightcolor=COLORS["primary"])
@@ -217,7 +227,11 @@ class PrestamosWindow(tk.Toplevel):
         self._button(top, "Limpiar", "#6C757D", self._clear_emitidos_filters).pack(side="left")
 
         cols = ("id", "fecha", "codigo", "nombre", "lote", "cantidad", "destino", "estado")
-        self.tree_emit = ttk.Treeview(sec, columns=cols, show="headings", height=11)
+        self.tree_emit = SearchableTreeview(
+            sec, columns=cols,
+            search_columns=["codigo", "nombre", "lote", "destino"],
+            height=11,
+        )
         self.tree_emit.grid(row=1, column=0, sticky="nsew")
         for key, title, width in [
             ("id", "ID", 55),
@@ -231,11 +245,32 @@ class PrestamosWindow(tk.Toplevel):
         ]:
             self.tree_emit.heading(key, text=title)
             self.tree_emit.column(key, width=width, anchor="center")
-        attach_treeview_sorting(self.tree_emit)
+        attach_treeview_sorting(self.tree_emit.tree)
 
-        ysb = ttk.Scrollbar(sec, orient="vertical", command=self.tree_emit.yview)
-        self.tree_emit.configure(yscrollcommand=ysb.set)
-        ysb.grid(row=1, column=1, sticky="ns")
+        # Pagination controls
+        pag_frame = tk.Frame(sec, bg=COLORS["secondary"])
+        pag_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        btn_style = dict(bg=COLORS["primary"], fg="white", font=("Segoe UI", 9, "bold"),
+                 relief="flat", bd=0, padx=8, pady=3, cursor="hand2")
+        self.btn_emit_prev = tk.Button(pag_frame, text="< Anterior",
+                           command=self._emit_prev_page, **btn_style)
+        self.btn_emit_prev.pack(side="left", padx=2)
+        self.lbl_emit_page = tk.Label(pag_frame, text="Pagina 1 de 1",
+                          bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9))
+        self.lbl_emit_page.pack(side="left", padx=10)
+        self.btn_emit_next = tk.Button(pag_frame, text="Siguiente >",
+                           command=self._emit_next_page, **btn_style)
+        self.btn_emit_next.pack(side="left", padx=2)
+        tk.Label(pag_frame, text="Mostrar:", bg=COLORS["secondary"], fg=COLORS["text_dark"],
+             font=("Segoe UI", 9)).pack(side="left", padx=(15, 4))
+        self.combo_emit_page_size = ttk.Combobox(pag_frame, values=[15, 25, 50, 100],
+                              state="readonly", width=6, font=("Segoe UI", 9))
+        self.combo_emit_page_size.set("15")
+        self.combo_emit_page_size.bind("<<ComboboxSelected>>", self._emit_on_page_size_change)
+        self.combo_emit_page_size.pack(side="left", padx=2)
+        self.lbl_emit_total = tk.Label(pag_frame, text="", bg=COLORS["secondary"],
+                           fg=COLORS["text_muted"], font=("Segoe UI", 9, "italic"))
+        self.lbl_emit_total.pack(side="left", padx=(12, 0))
 
     def _entry(self, parent, label, var, row, col):
         tk.Label(parent, text=label, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=row, column=col, sticky="w", padx=8, pady=(6, 2))
@@ -490,6 +525,7 @@ class PrestamosWindow(tk.Toplevel):
             "id_usuario_presta": self._user.get("id"),
             "id_usuario_destino": destino.get("id"),
             "firma_presta_path": self._user.get("permisos", {}).get("firma_path", ""),
+            "fecha_limite": get_date_value(self.w_fecha_limite),
             "observacion": self.txt_obs.get("1.0", "end-1c").strip(),
         }
 
@@ -507,6 +543,7 @@ class PrestamosWindow(tk.Toplevel):
         self.v_cantidad.set("")
         self.v_destino.set("")
         self.txt_obs.delete("1.0", "end")
+        self._clear_date_widget(self.w_fecha_limite)
         self._current_sustancia = None
         self._lotes = []
         self.cb_lote.configure(values=[])
@@ -535,9 +572,12 @@ class PrestamosWindow(tk.Toplevel):
             )
 
     def _refresh_emitidos(self):
-        self.tree_emit.delete(*self.tree_emit.get_children())
         my_id = self._user.get("id")
         if not my_id:
+            self._emit_all_rows = []
+            self._emit_page = 1
+            self._emit_total = 0
+            self._emit_render_page()
             return
 
         mes = self.v_mes_historial.get().strip()
@@ -545,10 +585,9 @@ class PrestamosWindow(tk.Toplevel):
             my_id,
             self._maestras,
             mes=mes,
-            limit=None if mes else 15,
+            limit=None,
         )
 
-        fecha_q = ""
         desde_q = get_date_value(self.w_hist_desde)
         hasta_q = get_date_value(self.w_hist_hasta)
         codigo_q = self.v_hist_codigo.get().strip().upper()
@@ -556,8 +595,6 @@ class PrestamosWindow(tk.Toplevel):
         destino_q = self.v_hist_destino.get().strip().upper()
         estado_q = self.v_hist_estado.get().strip().upper()
 
-        if fecha_q:
-            rows = [r for r in rows if str(r.get("fecha_prestamo", "")).strip() == fecha_q]
         if desde_q:
             rows = [r for r in rows if str(r.get("fecha_prestamo", "")).strip() >= desde_q]
         if hasta_q:
@@ -571,7 +608,16 @@ class PrestamosWindow(tk.Toplevel):
         if estado_q:
             rows = [r for r in rows if estado_q in str(r.get("estado", "")).upper()]
 
-        for r in rows:
+        self._emit_all_rows = rows
+        self._emit_total = len(rows)
+        self._emit_page = 1
+        self._emit_total_pages = max(1, -(-self._emit_total // self._emit_page_size))
+        self._emit_render_page()
+
+    def _emit_render_page(self):
+        self.tree_emit.clear()
+        start = (self._emit_page - 1) * self._emit_page_size
+        for r in self._emit_all_rows[start:start + self._emit_page_size]:
             self.tree_emit.insert(
                 "",
                 "end",
@@ -586,6 +632,37 @@ class PrestamosWindow(tk.Toplevel):
                     r.get("estado", ""),
                 ),
             )
+        self._emit_update_pag_buttons()
+
+    def _emit_prev_page(self):
+        if self._emit_page > 1:
+            self._emit_page -= 1
+            self._emit_render_page()
+
+    def _emit_next_page(self):
+        total_pages = getattr(self, "_emit_total_pages", 1)
+        if self._emit_page < total_pages:
+            self._emit_page += 1
+            self._emit_render_page()
+
+    def _emit_on_page_size_change(self, _event=None):
+        try:
+            self._emit_page_size = int(self.combo_emit_page_size.get())
+            self._emit_page = 1
+            self._emit_total_pages = max(1, -(-self._emit_total // self._emit_page_size))
+            self._emit_render_page()
+        except ValueError:
+            pass
+
+    def _emit_update_pag_buttons(self):
+        if not hasattr(self, "btn_emit_prev"):
+            return
+        total_pages = getattr(self, "_emit_total_pages", 1)
+        self.btn_emit_prev.config(state=tk.NORMAL if self._emit_page > 1 else tk.DISABLED)
+        self.btn_emit_next.config(state=tk.NORMAL if self._emit_page < total_pages else tk.DISABLED)
+        self.lbl_emit_page.config(text=f"Pagina {self._emit_page} de {total_pages}")
+        if hasattr(self, "lbl_emit_total"):
+            self.lbl_emit_total.config(text=f"({self._emit_total} registros)")
 
     def _selected_prestamo_id(self):
         sel = self.tree_pend.selection()
