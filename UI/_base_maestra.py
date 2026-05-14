@@ -31,7 +31,7 @@ class MaestraBase(tk.Toplevel):
     LIST_TITLE = "Registros"
     DETAIL_TITLE = "Detalle"
     _MSG_SIN_SELECCION = "Seleccione un registro de la lista."
-    SHOW_UPDATE_BUTTON = True
+    SHOW_UPDATE_BUTTON = False
     DIRECT_SAVE_ON_SELECTION = False
     CONFIRM_DIRECT_SAVE_MESSAGE = "¿Desea guardar los cambios de este registro?"
 
@@ -232,12 +232,15 @@ class MaestraBase(tk.Toplevel):
             self._modo = "actualizar"
 
         if self._modo not in ("nuevo", "actualizar"):
-            messagebox.showwarning(
-                "Aviso",
-                "Presione 'Nuevo' para agregar o seleccione un registro y presione 'Actualizar'.",
-                parent=self,
-            )
-            return
+            if self._seleccionado_id is not None:
+                self._modo = "actualizar"
+            else:
+                messagebox.showwarning(
+                    "Aviso",
+                    "Presione 'Nuevo' para agregar o seleccione un registro para editar y guardar.",
+                    parent=self,
+                )
+                return
         datos = self._get_form_data()
         valido, mensaje = self._validate(datos)
         if not valido:

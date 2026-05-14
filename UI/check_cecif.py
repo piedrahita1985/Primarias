@@ -1,11 +1,11 @@
 """Lista de Chequeo – Recepción de Compra (CECIF)."""
-import os
+from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from PIL import Image, ImageTk
 
-from app_paths import resource_path
+from app_paths import app_base_path, resource_path
 from config.config import COLORS
 from logica import check_logica as chk
 from logica import movimientos_common as common
@@ -113,13 +113,14 @@ class FirmaSelector(tk.Frame):
 
     def _load_firma(self, path):
         self._clear_firma()
-        if not path or not os.path.isfile(path):
+        resolved_path = self._resolve_firma_path(path)
+        if not resolved_path:
             self.lbl_firma.configure(image="", text="Sin firma registrada",
                                      fg=COLORS["text_muted"], font=("Segoe UI", 9, "italic"),
                                      width=0, height=0)
             return
         try:
-            raw = Image.open(path)
+            raw = Image.open(resolved_path)
             # Maintain aspect ratio, fill up to 480×140 px
             raw.thumbnail((480, 140), Image.LANCZOS)
             photo = ImageTk.PhotoImage(raw)
@@ -134,6 +135,27 @@ class FirmaSelector(tk.Frame):
     def _clear_firma(self):
         self._images.pop("firma", None)
         self.lbl_firma.configure(image="", text="")
+
+    @staticmethod
+    def _resolve_firma_path(path_value):
+        raw = str(path_value or "").strip()
+        if not raw:
+            return None
+
+        p = Path(raw)
+        candidates = [p]
+        if not p.is_absolute():
+            base = app_base_path()
+            candidates.append(base / p)
+            candidates.append(base / raw.replace("\\", "/"))
+
+        for c in candidates:
+            try:
+                if c.is_file():
+                    return str(c)
+            except Exception:
+                continue
+        return None
 
     def get_id(self):
         return self._selected_id
@@ -191,6 +213,9 @@ class CheckCECIFWindow(tk.Toplevel):
         self._cecif_items = chk.cargar_cecif()
         self._wheel_active = False
         self._verif_rows: dict[str, VerifRow] = {}
+        
+        # Variables para formulario
+        self.v_unidad = tk.StringVar()
 
         self._build_ui()
         self.bind("<Enter>", self._activate_wheel)
@@ -301,9 +326,16 @@ class CheckCECIFWindow(tk.Toplevel):
         self.cb_codigo.bind("<<ComboboxSelected>>", self._on_codigo_selected)
         self.cb_codigo.bind("<FocusOut>", self._on_codigo_focusout)
 
+        tk.Label(sec, text="Unidad", bg=COLORS["secondary"], fg=COLORS["text_dark"],
+                 font=("Segoe UI", 9, "bold")).grid(row=0, column=1, sticky="w", padx=8, pady=(6, 2))
+        self.cb_unidad = ttk.Combobox(sec, textvariable=self.v_unidad,
+                                      values=[u.get("unidad", "") for u in self._maestras["unidades"] if u.get("unidad")],
+                                      state="readonly", font=("Segoe UI", 10))
+        self.cb_unidad.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 8))
+
         self.v_lote = tk.StringVar()
         upper_text_var(self.v_lote)
-        make_labeled_entry(sec, "Lote", self.v_lote, 0, 1)
+        make_labeled_entry(sec, "Lote", self.v_lote, 0, 2)
 
         self.v_cantidad = tk.StringVar()
         e_cant = make_labeled_entry(sec, "Cantidad", self.v_cantidad, 0, 2)
@@ -325,7 +357,10 @@ class CheckCECIFWindow(tk.Toplevel):
     def _build_section_verificacion(self):
         sec = self._sec("Verificación de recepción de reactivo y sustancias de referencia")
         sec.grid_columnconfigure(0, weight=1)
-        for i, (key, label) in enumerate(chk.VERIFICACION_CECIF_CAMPOS):
+        self._small_button(sec, "Todo Si", lambda: self._mark_rows_yes(self._verif_rows)).grid(
+            row=0, column=0, sticky="w", padx=4, pady=(2, 4)
+        )
+        for i, (key, label) in enumerate(chk.VERIFICACION_CECIF_CAMPOS, start=1):
             row = VerifRow(sec, label, COLORS["secondary"])
             row.grid(row=i, column=0, sticky="ew", padx=4, pady=1)
             sec.grid_rowconfigure(i, weight=0)
@@ -413,10 +448,17 @@ class CheckCECIFWindow(tk.Toplevel):
             self._clear_code_fields()
             return
         self.v_nombre.set(s.get("nombre", ""))
+        # Llenar unidad automáticamente
+        unidad_id = s.get("id_unidad")
+        if unidad_id:
+            unidad_map = common.map_by_id(self._maestras["unidades"])
+            unidad_obj = unidad_map.get(unidad_id, {})
+            self.v_unidad.set(unidad_obj.get("unidad", ""))
 
     def _clear_code_fields(self):
         self._current_sustancia = None
         self.v_nombre.set("")
+        self.v_unidad.set("")
 
     # ------------------------------------------------------------------
     # Misc helpers
@@ -434,6 +476,16 @@ class CheckCECIFWindow(tk.Toplevel):
         return tk.Button(self, text=text, bg=bg, fg="white",
                          font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
                          padx=14, pady=6, cursor="hand2", command=cmd)
+
+    def _small_button(self, parent, text, cmd):
+        return tk.Button(parent, text=text, bg=COLORS["primary"], fg="white",
+                         font=("Segoe UI", 8, "bold"), relief="flat", bd=0,
+                         padx=8, pady=3, cursor="hand2", command=cmd)
+
+    @staticmethod
+    def _mark_rows_yes(rows_dict):
+        for row in rows_dict.values():
+            row.set("Si")
 
     # ------------------------------------------------------------------
     # Save
@@ -512,10 +564,9 @@ class CheckCECIFWindow(tk.Toplevel):
 
         chk.guardar_cecif_nuevo(self._cecif_items, datos)
         messagebox.showinfo("Guardado", "Lista de chequeo CECIF guardada exitosamente.", parent=self)
-        self._clear()
-        if messagebox.askyesno("Continuar", "¿Desea registrar la entrada de este producto?", parent=self):
-            from UI.entradas import EntradasWindow
-            EntradasWindow(self.master, prefill=prefill)
+        self.destroy()
+        from UI.entradas import EntradasWindow
+        EntradasWindow(self.master, prefill=prefill)
 
     # ------------------------------------------------------------------
     # Clear

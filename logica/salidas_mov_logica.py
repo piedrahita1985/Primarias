@@ -22,12 +22,32 @@ def cargar():
     return common.cargar_salidas()
 
 
+def _resolver_id_usuario(db, usuario: str) -> int:
+    usuario_txt = str(usuario or "").strip()
+    if usuario_txt:
+        usuarios = db.get_usuarios()
+        exacto = next((u for u in usuarios if str(u.get("usuario", "")).strip() == usuario_txt), None)
+        if exacto:
+            return exacto["id"]
+        por_nombre = next((u for u in usuarios if str(u.get("nombre", "")).strip() == usuario_txt), None)
+        if por_nombre:
+            return por_nombre["id"]
+
+    usuarios = db.get_usuarios()
+    habilitado = next((u for u in usuarios if str(u.get("estado", "HABILITADA")) == "HABILITADA"), None)
+    if habilitado:
+        return habilitado["id"]
+    if usuarios:
+        return usuarios[0]["id"]
+    raise ValueError("No hay usuarios registrados para asociar el movimiento de salida.")
+
+
 def agregar(record, usuario="SISTEMA"):
     record = _normalize_record_fields(record)
     db = get_db()
     try:
         # id_usuario puede venir en el record o derivarse de usuario
-        id_usuario = record.pop("id_usuario", None) or 0
+        id_usuario = record.pop("id_usuario", None) or _resolver_id_usuario(db, usuario)
         nuevo_id = db.crear_salida(record, id_usuario)
         resumen = f"cant={record.get('cantidad', '')} | entrada={record.get('id_entrada', record.get('id_inventario', ''))}"
         bit.registrar_campos(
@@ -87,14 +107,17 @@ def lotes_disponibles_por_sustancia(id_sustancia):
             continue
         if e.get("id_sustancia") != id_sustancia:
             continue
-        disponible = common.to_float(e.get("cantidad_actual", e.get("cantidad", 0)))
-        if disponible <= 0:
+        cantidad_envases = common.to_float(e.get("cantidad_actual", e.get("cantidad", 0)))
+        if cantidad_envases <= 0:
             continue
+        presentacion = common.to_float(e.get("presentacion") or 1) or 1
+        disponible_contenido = round(cantidad_envases * presentacion, 4)
         disponibles.append({
             "id_entrada": e.get("id"),
             "lote": e.get("lote", ""),
             "catalogo": e.get("catalogo", ""),
-            "disponible": round(disponible, 4),
+            "disponible": disponible_contenido,
+            "presentacion": presentacion,
             "id_unidad": e.get("id_unidad"),
         })
     return disponibles
@@ -187,12 +210,15 @@ def enriquecer(rows, maestras):
         e = ent_by_id.get(ent_id, {})
         sust = sust_by_id.get(s.get("id_sustancia") or e.get("id_sustancia"), {})
         uni = uni_by_id.get(s.get("id_unidad") or e.get("id_unidad"), {})
+        presentacion = float(e.get("presentacion") or 1) or 1
+        cantidad_display = round(float(s.get("cantidad", 0)) * presentacion, 4)
         out.append({
             **s,
             "codigo": s.get("codigo") or sust.get("codigo", ""),
             "nombre": s.get("nombre") or sust.get("nombre", ""),
             "lote": s.get("lote") or e.get("lote", ""),
             "unidad_nombre": s.get("unidad") or uni.get("unidad", ""),
+            "cantidad_display": cantidad_display,
         })
     return out
 

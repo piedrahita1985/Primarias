@@ -6,48 +6,48 @@ import shutil
 
 import logica.usuarios_logica as _logica
 from config.config import COLORS
-from app_paths import resource_path
+from app_paths import app_base_path, resource_path
 from UI._base_maestra import MaestraBase, form_label, form_entry, form_estado
 
 _ROLES = ["administrador", "analista", "supervisor", "visualizador"]
 
 _PERMISOS_MENU = [
-    ("entradas", "Entradas"),
-    ("salidas", "Salidas"),
-    ("inventario", "Inventario"),
-    ("bitacora", "Bitácora"),
-    ("prestamos", "Préstamos"),
+    ("log_entradas", "Entradas"),
+    ("log_salidas", "Salidas"),
+    ("log_inventario", "Inventario"),
+    ("log_bitacora", "Bitácora"),
+    ("log_prestamos", "Préstamos"),
     ("recibidos", "Recibidos"),
-    ("sustancias", "Sustancias"),
-    ("tipos_entrada", "Tipos entrada"),
-    ("tipos_salida", "Tipos salida"),
-    ("fabricantes", "Fabricantes"),
-    ("unidades", "Unidades"),
-    ("ubicaciones", "Ubicaciones"),
-    ("condiciones", "Condiciones"),
-    ("colores", "Colores"),
-    ("usuarios", "Usuarios"),
+    ("maestra_sustancias", "Sustancias"),
+    ("maestra_tipos_entrada", "Tipos entrada"),
+    ("maestra_tipos_salida", "Tipos salida"),
+    ("maestra_fabricantes", "Fabricantes"),
+    ("maestra_unidades", "Unidades"),
+    ("maestra_ubicaciones", "Ubicaciones"),
+    ("maestra_condiciones", "Condiciones"),
+    ("maestra_colores", "Colores"),
+    ("maestra_usuarios", "Usuarios"),
 ]
 
 _PERMISOS_MOVIMIENTOS = [
-    ("entradas", "Entradas"),
-    ("salidas", "Salidas"),
-    ("inventario", "Inventario"),
-    ("bitacora", "Bitácora"),
-    ("prestamos", "Préstamos"),
+    ("log_entradas", "Entradas"),
+    ("log_salidas", "Salidas"),
+    ("log_inventario", "Inventario"),
+    ("log_bitacora", "Bitácora"),
+    ("log_prestamos", "Préstamos"),
     ("recibidos", "Recibidos"),
 ]
 
 _PERMISOS_MAESTRAS = [
-    ("sustancias", "Sustancias"),
-    ("tipos_entrada", "Tipos entrada"),
-    ("tipos_salida", "Tipos salida"),
-    ("fabricantes", "Fabricantes"),
-    ("unidades", "Unidades"),
-    ("ubicaciones", "Ubicaciones"),
-    ("condiciones", "Condiciones"),
-    ("colores", "Colores"),
-    ("usuarios", "Usuarios"),
+    ("maestra_sustancias", "Sustancias"),
+    ("maestra_tipos_entrada", "Tipos entrada"),
+    ("maestra_tipos_salida", "Tipos salida"),
+    ("maestra_fabricantes", "Fabricantes"),
+    ("maestra_unidades", "Unidades"),
+    ("maestra_ubicaciones", "Ubicaciones"),
+    ("maestra_condiciones", "Condiciones"),
+    ("maestra_colores", "Colores"),
+    ("maestra_usuarios", "Usuarios"),
 ]
 
 
@@ -76,21 +76,21 @@ class UsuariosWindow(MaestraBase):
         self._v_firma_password = tk.StringVar()
         self._show_pass = tk.BooleanVar(value=False)
         self._perm_vars = {
-            "entradas": tk.BooleanVar(value=True),
-            "salidas": tk.BooleanVar(value=True),
-            "inventario": tk.BooleanVar(value=True),
-            "bitacora": tk.BooleanVar(value=True),
-            "prestamos": tk.BooleanVar(value=True),
+            "log_entradas": tk.BooleanVar(value=True),
+            "log_salidas": tk.BooleanVar(value=True),
+            "log_inventario": tk.BooleanVar(value=True),
+            "log_bitacora": tk.BooleanVar(value=True),
+            "log_prestamos": tk.BooleanVar(value=True),
             "recibidos": tk.BooleanVar(value=True),
-            "sustancias": tk.BooleanVar(value=True),
-            "tipos_entrada": tk.BooleanVar(value=True),
-            "tipos_salida": tk.BooleanVar(value=True),
-            "fabricantes": tk.BooleanVar(value=True),
-            "unidades": tk.BooleanVar(value=True),
-            "ubicaciones": tk.BooleanVar(value=True),
-            "condiciones": tk.BooleanVar(value=True),
-            "colores": tk.BooleanVar(value=True),
-            "usuarios": tk.BooleanVar(value=True),
+            "maestra_sustancias": tk.BooleanVar(value=True),
+            "maestra_tipos_entrada": tk.BooleanVar(value=True),
+            "maestra_tipos_salida": tk.BooleanVar(value=True),
+            "maestra_fabricantes": tk.BooleanVar(value=True),
+            "maestra_unidades": tk.BooleanVar(value=True),
+            "maestra_ubicaciones": tk.BooleanVar(value=True),
+            "maestra_condiciones": tk.BooleanVar(value=True),
+            "maestra_colores": tk.BooleanVar(value=True),
+            "maestra_usuarios": tk.BooleanVar(value=True),
         }
 
         f = tk.Frame(parent, bg=COLORS["secondary"])
@@ -229,7 +229,12 @@ class UsuariosWindow(MaestraBase):
         src = Path(path)
         dst = firmas_dir / src.name
         shutil.copy2(src, dst)
-        self._v_firma_path.set(str(dst))
+        base = app_base_path().resolve()
+        try:
+            relative = dst.resolve().relative_to(base)
+            self._v_firma_path.set(relative.as_posix())
+        except Exception:
+            self._v_firma_path.set(str(dst))
 
     def _toggle_password(self):
         visible = not self._show_pass.get()

@@ -1,0 +1,25 @@
+# Entorno virtual
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Base de datos (runtime)
+data/*.db
+data/*.bak
+data/*.db-shm
+data/*.db-wal
+
+# Firmas de usuarios (datos sensibles / runtime)
+firmas/
+
+# Builds / distribución
+build/
+dist/
+*.spec
+
+# Archivos de respaldo y temporales
+*.bak
+*.tmp
+*.log

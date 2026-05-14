@@ -51,11 +51,29 @@ def construir_inventario():
         if cant_min > 0:
             alarma_stock = "BAJO MINIMO" if stock_val < cant_min else "OK"
 
+        # Calculo de cantidad en envases: parte entera + iniciado si hay fraccion
+        completos = int(stock_val)
+        fraccion = stock_val - completos
+        if fraccion > 0.001:
+            if completos == 0:
+                cantidad_texto = "1 iniciado"
+            elif completos == 1:
+                cantidad_texto = "1 envase y 1 iniciado"
+            else:
+                cantidad_texto = f"{completos} envases y 1 iniciado"
+        elif completos == 0:
+            cantidad_texto = ""
+        elif completos == 1:
+            cantidad_texto = "1 envase"
+        else:
+            cantidad_texto = f"{completos} envases"
+
         rows.append({
             **e,
             "alarma_fv": alarma_fv,
             "alarma_stock": alarma_stock,
             "stock": round(stock_val, 4),
+            "cantidad": cantidad_texto,
         })
 
     rows.sort(key=lambda r: (str(r.get("codigo", "")), str(r.get("lote", ""))))

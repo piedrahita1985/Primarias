@@ -48,6 +48,9 @@ class CheckClienteWindow(tk.Toplevel):
         self._verif_nuevas: dict[str, VerifRow] = {}
         self._verif_destapadas: dict[str, VerifRow] = {}
         self._canvas = None
+        
+        # Variables para formulario
+        self.v_unidad = tk.StringVar()
 
         self._build_ui()
         self.bind("<Enter>", self._activate_wheel)
@@ -151,13 +154,20 @@ class CheckClienteWindow(tk.Toplevel):
         self.cb_codigo.bind("<<ComboboxSelected>>", self._on_codigo_selected)
         self.cb_codigo.bind("<FocusOut>", self._on_codigo_focusout)
 
+        tk.Label(sec, text="Unidad", bg=COLORS["secondary"], fg=COLORS["text_dark"],
+                 font=("Segoe UI", 9, "bold")).grid(row=0, column=1, sticky="w", padx=8, pady=(6, 2))
+        self.cb_unidad = ttk.Combobox(sec, textvariable=self.v_unidad,
+                                      values=[u.get("unidad", "") for u in self._maestras["unidades"] if u.get("unidad")],
+                                      state="readonly", font=("Segoe UI", 10))
+        self.cb_unidad.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 8))
+
         self.v_cantidad = tk.StringVar()
-        e_cant = make_labeled_entry(sec, "Cantidad", self.v_cantidad, 0, 1)
+        e_cant = make_labeled_entry(sec, "Cantidad", self.v_cantidad, 0, 2)
         e_cant.bind("<KeyPress>", only_numeric)
 
         self.v_obs_prod = tk.StringVar()
         upper_text_var(self.v_obs_prod)
-        make_labeled_entry(sec, "Observación", self.v_obs_prod, 0, 2, width=40)
+        make_labeled_entry(sec, "Observación", self.v_obs_prod, 0, 3, width=40)
 
         self.v_nombre = tk.StringVar()
         # Nombre autocompleted, span 4 cols
@@ -172,7 +182,10 @@ class CheckClienteWindow(tk.Toplevel):
     def _build_section_nuevas(self):
         sec = self._sec("1. Verificación – Sustancias Nuevas (selladas)")
         sec.grid_columnconfigure(0, weight=1)
-        for i, (key, label) in enumerate(chk.VERIFICACION_NUEVAS_CAMPOS):
+        self._small_button(sec, "Todo Si", lambda: self._mark_rows_yes(self._verif_nuevas)).grid(
+            row=0, column=0, sticky="w", padx=4, pady=(2, 4)
+        )
+        for i, (key, label) in enumerate(chk.VERIFICACION_NUEVAS_CAMPOS, start=1):
             row = VerifRow(sec, label, COLORS["secondary"])
             row.grid(row=i, column=0, sticky="ew", padx=4, pady=1)
             self._verif_nuevas[key] = row
@@ -180,7 +193,10 @@ class CheckClienteWindow(tk.Toplevel):
     def _build_section_destapadas(self):
         sec = self._sec("2. Verificación – Sustancias ya Destapadas o Reenvasadas por el Cliente")
         sec.grid_columnconfigure(0, weight=1)
-        for i, (key, label) in enumerate(chk.VERIFICACION_DESTAPADAS_CAMPOS):
+        self._small_button(sec, "Todo Si", lambda: self._mark_rows_yes(self._verif_destapadas)).grid(
+            row=0, column=0, sticky="w", padx=4, pady=(2, 4)
+        )
+        for i, (key, label) in enumerate(chk.VERIFICACION_DESTAPADAS_CAMPOS, start=1):
             row = VerifRow(sec, label, COLORS["secondary"])
             row.grid(row=i, column=0, sticky="ew", padx=4, pady=1)
             self._verif_destapadas[key] = row
@@ -267,10 +283,17 @@ class CheckClienteWindow(tk.Toplevel):
             self._clear_code_fields()
             return
         self.v_nombre.set(s.get("nombre", ""))
+        # Llenar unidad automáticamente
+        unidad_id = s.get("id_unidad")
+        if unidad_id:
+            unidad_map = common.map_by_id(self._maestras["unidades"])
+            unidad_obj = unidad_map.get(unidad_id, {})
+            self.v_unidad.set(unidad_obj.get("unidad", ""))
 
     def _clear_code_fields(self):
         self._current_sustancia = None
         self.v_nombre.set("")
+        self.v_unidad.set("")
 
     # ------------------------------------------------------------------
     # Misc helpers
@@ -288,6 +311,16 @@ class CheckClienteWindow(tk.Toplevel):
         return tk.Button(self, text=text, bg=bg, fg="white",
                          font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
                          padx=14, pady=6, cursor="hand2", command=cmd)
+
+    def _small_button(self, parent, text, cmd):
+        return tk.Button(parent, text=text, bg=COLORS["primary"], fg="white",
+                         font=("Segoe UI", 8, "bold"), relief="flat", bd=0,
+                         padx=8, pady=3, cursor="hand2", command=cmd)
+
+    @staticmethod
+    def _mark_rows_yes(rows_dict):
+        for row in rows_dict.values():
+            row.set("Si")
 
     # ------------------------------------------------------------------
     # Save
@@ -362,10 +395,9 @@ class CheckClienteWindow(tk.Toplevel):
 
         chk.guardar_cliente_nuevo(self._clientes_items, datos)
         messagebox.showinfo("Guardado", "Lista de chequeo de Cliente guardada exitosamente.", parent=self)
-        self._clear()
-        if messagebox.askyesno("Continuar", "¿Desea registrar la entrada de este producto?", parent=self):
-            from UI.entradas import EntradasWindow
-            EntradasWindow(self.master, prefill=prefill)
+        self.destroy()
+        from UI.entradas import EntradasWindow
+        EntradasWindow(self.master, prefill=prefill)
 
     # ------------------------------------------------------------------
     # Clear

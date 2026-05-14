@@ -100,10 +100,10 @@ class RecibidosWindow(tk.Toplevel):
         self._button(bar, "Aceptar", COLORS["success"], lambda: self._responder(True)).pack(side="left", padx=(0, 6))
         self._button(bar, "Rechazar", COLORS["error"], lambda: self._responder(False)).pack(side="left", padx=(0, 6))
         self._button(bar, "Registrar devolución", COLORS["primary"], self._devolver).pack(side="left")
-        self._button(bar, "Actualizar", "#6C757D", self._refresh_all).pack(side="right")
 
         bottom = tk.Frame(self, bg=COLORS["secondary"])
         bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+        self._button(bottom, "Actualizar", "#6C757D", self._refresh_all).pack(side="right", padx=(6, 0))
         self._button(bottom, "Salir", "#6C757D", self.destroy).pack(side="right")
 
     def _button(self, parent, text, bg, cmd):

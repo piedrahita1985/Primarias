@@ -117,7 +117,7 @@ def _add_column_universal(conn, motor: str, tabla: str, columna: str,
 
 def _inventario_permite_anulado(conn) -> bool:
     cur = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='inventario'"
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='log_inventario'"
     )
     row = cur.fetchone()
     ddl = row[0] if row and row[0] else ""
@@ -133,8 +133,8 @@ def _migrar_schema(conn):
 
     # ── 1. Estado en catálogos simples ──────────────────────────────────────
     catalogos_sin_estado = [
-        "fabricantes", "unidad", "condicion_alm",
-        "color_refuerzo", "maestras_ubicaciones", "maestras_sustancias",
+        "maestra_fabricantes", "maestra_unidades", "maestra_condiciones",
+        "maestra_colores", "maestra_ubicaciones", "maestra_sustancias",
     ]
     for tabla in catalogos_sin_estado:
         if not _col_existe(conn, tabla, "estado"):
@@ -155,20 +155,20 @@ def _migrar_schema(conn):
         ("observaciones",    "TEXT"),
     ]
     for col, tipo in extra_inventario:
-        if not _col_existe(conn, "inventario", col):
-            conn.execute(f"ALTER TABLE inventario ADD COLUMN {col} {tipo}")
+        if not _col_existe(conn, "log_inventario", col):
+            conn.execute(f"ALTER TABLE log_inventario ADD COLUMN {col} {tipo}")
 
     # ── 2.1 Permitir estado ANULADO en inventario (reconstrucción idempotente)
     if not _inventario_permite_anulado(conn):
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS inventario_new (
+            CREATE TABLE IF NOT EXISTS log_inventario_new (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                id_sustancia      INTEGER NOT NULL REFERENCES maestras_sustancias(id),
-                id_ubicacion      INTEGER REFERENCES maestras_ubicaciones(id),
-                id_fabricante     INTEGER REFERENCES fabricantes(id),
-                id_unidad         INTEGER REFERENCES unidad(id),
-                id_condicion      INTEGER REFERENCES condicion_alm(id),
-                id_color          INTEGER REFERENCES color_refuerzo(id),
+                id_sustancia      INTEGER NOT NULL REFERENCES maestra_sustancias(id),
+                id_ubicacion      INTEGER REFERENCES maestra_ubicaciones(id),
+                id_fabricante     INTEGER REFERENCES maestra_fabricantes(id),
+                id_unidad         INTEGER REFERENCES maestra_unidades(id),
+                id_condicion      INTEGER REFERENCES maestra_condiciones(id),
+                id_color          INTEGER REFERENCES maestra_colores(id),
                 lote              TEXT,
                 fecha_vencimiento TEXT,
                 cantidad_actual   REAL    NOT NULL DEFAULT 0,
@@ -186,7 +186,7 @@ def _migrar_schema(conn):
             )
         """)
         conn.execute("""
-            INSERT INTO inventario_new
+            INSERT INTO log_inventario_new
                 (id, id_sustancia, id_ubicacion, id_fabricante, id_unidad,
                  id_condicion, id_color, lote, fecha_vencimiento,
                  cantidad_actual, estado,
@@ -199,10 +199,10 @@ def _migrar_schema(conn):
                    potencia, catalogo, presentacion,
                    certificado_anl, ficha_seguridad, factura_compra,
                    fecha_entrada, factura, observaciones
-              FROM inventario
+              FROM log_inventario
         """)
-        conn.execute("DROP TABLE inventario")
-        conn.execute("ALTER TABLE inventario_new RENAME TO inventario")
+        conn.execute("DROP TABLE log_inventario")
+        conn.execute("ALTER TABLE log_inventario_new RENAME TO log_inventario")
 
     # ── 3. Columnas adicionales en salidas ───────────────────────────────────
     extra_salidas = [
@@ -212,13 +212,13 @@ def _migrar_schema(conn):
         ("factura",      "TEXT"),
     ]
     for col, tipo in extra_salidas:
-        if not _col_existe(conn, "salidas", col):
-            conn.execute(f"ALTER TABLE salidas ADD COLUMN {col} {tipo}")
+        if not _col_existe(conn, "log_salidas", col):
+            conn.execute(f"ALTER TABLE log_salidas ADD COLUMN {col} {tipo}")
 
     # ── 4. Reconstruir prestamos (sin CHECK, con columnas extendidas) ─────────
-    if not _col_existe(conn, "prestamos", "id_usuario_destino"):
+    if not _col_existe(conn, "log_prestamos", "id_usuario_destino"):
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS prestamos_new (
+            CREATE TABLE IF NOT EXISTS log_prestamos_new (
                 id                    INTEGER PRIMARY KEY AUTOINCREMENT,
                 id_inventario         INTEGER NOT NULL,
                 id_usuario            INTEGER NOT NULL,
@@ -243,22 +243,40 @@ def _migrar_schema(conn):
             )
         """)
         conn.execute("""
-            INSERT INTO prestamos_new
+            INSERT INTO log_prestamos_new
                 (id, id_inventario, id_usuario, fecha_hora, cantidad,
                  solicitante, observacion, estado,
                  fecha_devolucion, cantidad_devuelta, observacion_devolucion)
             SELECT id, id_inventario, id_usuario, fecha_hora, cantidad,
                    solicitante, observacion, estado,
                    fecha_devolucion, cantidad_devuelta, observacion_devolucion
-              FROM prestamos
+              FROM log_prestamos
         """)
-        conn.execute("DROP TABLE prestamos")
-        conn.execute("ALTER TABLE prestamos_new RENAME TO prestamos")
+        conn.execute("DROP TABLE log_prestamos")
+        conn.execute("ALTER TABLE log_prestamos_new RENAME TO log_prestamos")
+
+    # ── 4b. Columnas v2 en prestamos (seguimiento CECIF LE-FC009) ───────────
+    extra_prest_v2 = [
+        ("fecha_ensayo",           "TEXT"),
+        ("no_control_actividad",   "TEXT"),
+        ("analisis_realizado",     "TEXT"),
+        ("cantidad_mg",            "REAL"),
+        ("firma_entregado_por",    "TEXT"),
+        ("id_usuario_entregador",  "INTEGER"),
+        ("firma_analista",         "TEXT"),
+        ("id_usuario_analista",    "INTEGER"),
+        ("firma_verificador",      "TEXT"),
+        ("id_usuario_verificador", "INTEGER"),
+        ("observaciones_prestamo", "TEXT"),
+    ]
+    for col, tipo in extra_prest_v2:
+        if not _col_existe(conn, "log_prestamos", col):
+            conn.execute(f"ALTER TABLE log_prestamos ADD COLUMN {col} {tipo}")
 
     # ── 5. Reconstruir check_cecif con esquema completo ─────────────────────
-    if not _col_existe(conn, "check_cecif", "id_sustancia"):
+    if not _col_existe(conn, "log_check_cecif", "id_sustancia"):
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS check_cecif_new (
+            CREATE TABLE IF NOT EXISTS log_check_cecif_new (
                 id                       INTEGER PRIMARY KEY AUTOINCREMENT,
                 id_entrada               INTEGER,
                 id_usuario               INTEGER,
@@ -290,18 +308,18 @@ def _migrar_schema(conn):
             )
         """)
         conn.execute("""
-            INSERT INTO check_cecif_new
+            INSERT INTO log_check_cecif_new
                 (id, id_entrada, id_usuario, fecha_hora, estado, observacion)
             SELECT id, id_entrada, id_usuario, fecha_hora, estado, observacion
-              FROM check_cecif
+              FROM log_check_cecif
         """)
-        conn.execute("DROP TABLE check_cecif")
-        conn.execute("ALTER TABLE check_cecif_new RENAME TO check_cecif")
+        conn.execute("DROP TABLE log_check_cecif")
+        conn.execute("ALTER TABLE log_check_cecif_new RENAME TO log_check_cecif")
 
     # ── 6. Reconstruir check_clientes con esquema completo ───────────────────
-    if not _col_existe(conn, "check_clientes", "id_sustancia"):
+    if not _col_existe(conn, "log_check_clientes", "id_sustancia"):
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS check_clientes_new (
+            CREATE TABLE IF NOT EXISTS log_check_clientes_new (
                 id                    INTEGER PRIMARY KEY AUTOINCREMENT,
                 id_entrada            INTEGER,
                 id_usuario            INTEGER,
@@ -340,20 +358,43 @@ def _migrar_schema(conn):
             )
         """)
         conn.execute("""
-            INSERT INTO check_clientes_new
+            INSERT INTO log_check_clientes_new
                 (id, id_entrada, id_usuario, fecha_hora, estado, observacion)
             SELECT id, id_entrada, id_usuario, fecha_hora, estado, observacion
-              FROM check_clientes
+              FROM log_check_clientes
         """)
-        conn.execute("DROP TABLE check_clientes")
-        conn.execute("ALTER TABLE check_clientes_new RENAME TO check_clientes")
+        conn.execute("DROP TABLE log_check_clientes")
+        conn.execute("ALTER TABLE log_check_clientes_new RENAME TO log_check_clientes")
 
-    if not _col_existe(conn, "prestamos", "fecha_limite"):
-        conn.execute("ALTER TABLE prestamos ADD COLUMN fecha_limite TEXT")
+    if not _col_existe(conn, "log_prestamos", "fecha_limite"):
+        conn.execute("ALTER TABLE log_prestamos ADD COLUMN fecha_limite TEXT")
 
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_usuario ON prestamos(id_usuario)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_destino ON prestamos(id_usuario_destino)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_estado ON prestamos(estado_recepcion)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_usuario ON log_prestamos(id_usuario)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_destino ON log_prestamos(id_usuario_destino)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_prestamos_estado ON log_prestamos(estado_recepcion)")
+
+    # ── 7. Renombrar columnas antiguas de maestra_permisos_usuario ───────────
+    _RENOMBRAR_PERMISOS = [
+        ("entradas",      "log_entradas"),
+        ("salidas",       "log_salidas"),
+        ("inventario",    "log_inventario"),
+        ("bitacora",      "log_bitacora"),
+        ("prestamos",     "log_prestamos"),
+        ("sustancias",    "maestra_sustancias"),
+        ("tipos_entrada", "maestra_tipos_entrada"),
+        ("tipos_salida",  "maestra_tipos_salida"),
+        ("fabricantes",   "maestra_fabricantes"),
+        ("unidades",      "maestra_unidades"),
+        ("ubicaciones",   "maestra_ubicaciones"),
+        ("condiciones",   "maestra_condiciones"),
+        ("colores",       "maestra_colores"),
+        ("usuarios",      "maestra_usuarios"),
+    ]
+    for col_vieja, col_nueva in _RENOMBRAR_PERMISOS:
+        if _col_existe(conn, "maestra_permisos_usuario", col_vieja):
+            conn.execute(
+                f"ALTER TABLE maestra_permisos_usuario RENAME COLUMN {col_vieja} TO {col_nueva}"
+            )
 
     conn.execute("PRAGMA foreign_keys = ON")
     conn.commit()
@@ -367,8 +408,8 @@ def _migrar_schema_hibrido(conn, motor: str) -> None:
 
     # ── SQL Server: agregar columnas faltantes ────────────────────────────
     catalogos = [
-        "fabricantes", "unidad", "condicion_alm",
-        "color_refuerzo", "maestras_ubicaciones", "maestras_sustancias",
+        "maestra_fabricantes", "maestra_unidades", "maestra_condiciones",
+        "maestra_colores", "maestra_ubicaciones", "maestra_sustancias",
     ]
     for tabla in catalogos:
         if not _col_existe_universal(conn, motor, tabla, "estado"):
@@ -387,8 +428,8 @@ def _migrar_schema_hibrido(conn, motor: str) -> None:
         ("observaciones",   "NVARCHAR(MAX)",          None),
     ]
     for col, tipo, default in extra_inventario:
-        if not _col_existe_universal(conn, motor, "inventario", col):
-            _add_column_universal(conn, motor, "inventario", col, tipo, default)
+        if not _col_existe_universal(conn, motor, "log_inventario", col):
+            _add_column_universal(conn, motor, "log_inventario", col, tipo, default)
 
     extra_salidas = [
         ("estado",       "NVARCHAR(20) NOT NULL", "'ACTIVA'"),
@@ -397,8 +438,8 @@ def _migrar_schema_hibrido(conn, motor: str) -> None:
         ("factura",      "NVARCHAR(MAX)",          None),
     ]
     for col, tipo, default in extra_salidas:
-        if not _col_existe_universal(conn, motor, "salidas", col):
-            _add_column_universal(conn, motor, "salidas", col, tipo, default)
+        if not _col_existe_universal(conn, motor, "log_salidas", col):
+            _add_column_universal(conn, motor, "log_salidas", col, tipo, default)
 
     extra_prestamos = [
         ("id_usuario_destino",    "INT",                   None),
@@ -412,10 +453,47 @@ def _migrar_schema_hibrido(conn, motor: str) -> None:
         ("estado_devolucion",     "NVARCHAR(20) NOT NULL", "'NO_APLICA'"),
         ("id_usuario_devuelve",   "INT",                   None),
         ("fecha_limite",          "NVARCHAR(30)",           None),
+        # v2 – seguimiento CECIF LE-FC009
+        ("fecha_ensayo",          "NVARCHAR(30)",           None),
+        ("no_control_actividad",  "NVARCHAR(MAX)",          None),
+        ("analisis_realizado",    "NVARCHAR(MAX)",          None),
+        ("cantidad_mg",           "FLOAT",                  None),
+        ("firma_entregado_por",   "NVARCHAR(MAX)",          None),
+        ("id_usuario_entregador", "INT",                   None),
+        ("firma_analista",        "NVARCHAR(MAX)",          None),
+        ("id_usuario_analista",   "INT",                   None),
+        ("firma_verificador",     "NVARCHAR(MAX)",          None),
+        ("id_usuario_verificador","INT",                   None),
+        ("observaciones_prestamo","NVARCHAR(MAX)",          None),
     ]
     for col, tipo, default in extra_prestamos:
-        if not _col_existe_universal(conn, motor, "prestamos", col):
-            _add_column_universal(conn, motor, "prestamos", col, tipo, default)
+        if not _col_existe_universal(conn, motor, "log_prestamos", col):
+            _add_column_universal(conn, motor, "log_prestamos", col, tipo, default)
+
+    # ── Renombrar columnas antiguas de maestra_permisos_usuario (SQL Server) ─
+    _RENOMBRAR_PERMISOS_SS = [
+        ("entradas",      "log_entradas"),
+        ("salidas",       "log_salidas"),
+        ("inventario",    "log_inventario"),
+        ("bitacora",      "log_bitacora"),
+        ("prestamos",     "log_prestamos"),
+        ("sustancias",    "maestra_sustancias"),
+        ("tipos_entrada", "maestra_tipos_entrada"),
+        ("tipos_salida",  "maestra_tipos_salida"),
+        ("fabricantes",   "maestra_fabricantes"),
+        ("unidades",      "maestra_unidades"),
+        ("ubicaciones",   "maestra_ubicaciones"),
+        ("condiciones",   "maestra_condiciones"),
+        ("colores",       "maestra_colores"),
+        ("usuarios",      "maestra_usuarios"),
+    ]
+    cursor = conn.cursor()
+    for col_vieja, col_nueva in _RENOMBRAR_PERMISOS_SS:
+        if _col_existe_universal(conn, motor, "maestra_permisos_usuario", col_vieja):
+            cursor.execute(
+                f"EXEC sp_rename 'maestra_permisos_usuario.{col_vieja}', '{col_nueva}', 'COLUMN'"
+            )
+    conn.commit()
 
 
 def _crear_tablas_sqlserver(conn) -> None:
@@ -428,64 +506,64 @@ def _crear_tablas_sqlserver(conn) -> None:
             f"WHERE TABLE_NAME = '{nombre}') BEGIN {ddl} END"
         )
 
-    _si_no_existe("fabricantes", """
-        CREATE TABLE fabricantes (
+    _si_no_existe("maestra_fabricantes", """
+        CREATE TABLE maestra_fabricantes (
             id INT IDENTITY(1,1) PRIMARY KEY,
             fabricante NVARCHAR(255) NOT NULL,
             estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
             CONSTRAINT uq_fabricantes UNIQUE (fabricante)
         )
     """)
-    _si_no_existe("unidad", """
-        CREATE TABLE unidad (
+    _si_no_existe("maestra_unidades", """
+        CREATE TABLE maestra_unidades (
             id INT IDENTITY(1,1) PRIMARY KEY,
             unidad NVARCHAR(100) NOT NULL,
             estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
             CONSTRAINT uq_unidad UNIQUE (unidad)
         )
     """)
-    _si_no_existe("condicion_alm", """
-        CREATE TABLE condicion_alm (
+    _si_no_existe("maestra_condiciones", """
+        CREATE TABLE maestra_condiciones (
             id INT IDENTITY(1,1) PRIMARY KEY,
             condicion NVARCHAR(255) NOT NULL,
             estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
             CONSTRAINT uq_condicion_alm UNIQUE (condicion)
         )
     """)
-    _si_no_existe("color_refuerzo", """
-        CREATE TABLE color_refuerzo (
+    _si_no_existe("maestra_colores", """
+        CREATE TABLE maestra_colores (
             id INT IDENTITY(1,1) PRIMARY KEY,
             color_refuerzo NVARCHAR(100) NOT NULL,
             estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
             CONSTRAINT uq_color_refuerzo UNIQUE (color_refuerzo)
         )
     """)
-    _si_no_existe("tipo_entrada", """
-        CREATE TABLE tipo_entrada (
+    _si_no_existe("maestra_tipos_entrada", """
+        CREATE TABLE maestra_tipos_entrada (
             id INT IDENTITY(1,1) PRIMARY KEY,
             tipo_entrada NVARCHAR(255) NOT NULL,
             estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
             CONSTRAINT uq_tipo_entrada UNIQUE (tipo_entrada)
         )
     """)
-    _si_no_existe("tipo_salida", """
-        CREATE TABLE tipo_salida (
+    _si_no_existe("maestra_tipos_salida", """
+        CREATE TABLE maestra_tipos_salida (
             id INT IDENTITY(1,1) PRIMARY KEY,
             tipo_salida NVARCHAR(255) NOT NULL,
             estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA',
             CONSTRAINT uq_tipo_salida UNIQUE (tipo_salida)
         )
     """)
-    _si_no_existe("maestras_ubicaciones", """
-        CREATE TABLE maestras_ubicaciones (
+    _si_no_existe("maestra_ubicaciones", """
+        CREATE TABLE maestra_ubicaciones (
             id INT IDENTITY(1,1) PRIMARY KEY,
             ubicacion NVARCHAR(255) NOT NULL,
             no_caja NVARCHAR(100) NOT NULL,
             estado NVARCHAR(20) NOT NULL DEFAULT 'HABILITADA'
         )
     """)
-    _si_no_existe("maestras_sustancias", """
-        CREATE TABLE maestras_sustancias (
+    _si_no_existe("maestra_sustancias", """
+        CREATE TABLE maestra_sustancias (
             id INT IDENTITY(1,1) PRIMARY KEY,
             codigo NVARCHAR(100) NOT NULL,
             nombre NVARCHAR(MAX) NOT NULL,
@@ -498,8 +576,8 @@ def _crear_tablas_sqlserver(conn) -> None:
             CONSTRAINT uq_maestras_sustancias UNIQUE (codigo)
         )
     """)
-    _si_no_existe("usuarios", """
-        CREATE TABLE usuarios (
+    _si_no_existe("maestra_usuarios", """
+        CREATE TABLE maestra_usuarios (
             id INT IDENTITY(1,1) PRIMARY KEY,
             usuario NVARCHAR(100) NOT NULL,
             contrasena NVARCHAR(255) NOT NULL,
@@ -511,29 +589,29 @@ def _crear_tablas_sqlserver(conn) -> None:
             CONSTRAINT uq_usuarios UNIQUE (usuario)
         )
     """)
-    _si_no_existe("permisos_usuario", """
-        CREATE TABLE permisos_usuario (
+    _si_no_existe("maestra_permisos_usuario", """
+        CREATE TABLE maestra_permisos_usuario (
             id_usuario INT PRIMARY KEY,
-            entradas INT DEFAULT 1,
-            salidas INT DEFAULT 1,
-            inventario INT DEFAULT 1,
-            bitacora INT DEFAULT 1,
-            prestamos INT DEFAULT 1,
+            log_entradas INT DEFAULT 1,
+            log_salidas INT DEFAULT 1,
+            log_inventario INT DEFAULT 1,
+            log_bitacora INT DEFAULT 1,
+            log_prestamos INT DEFAULT 1,
             recibidos INT DEFAULT 1,
-            sustancias INT DEFAULT 1,
-            tipos_entrada INT DEFAULT 1,
-            tipos_salida INT DEFAULT 1,
-            fabricantes INT DEFAULT 1,
-            unidades INT DEFAULT 1,
-            ubicaciones INT DEFAULT 1,
-            condiciones INT DEFAULT 1,
-            colores INT DEFAULT 1,
-            usuarios INT DEFAULT 1,
-            FOREIGN KEY (id_usuario) REFERENCES usuarios(id)
+            maestra_sustancias INT DEFAULT 1,
+            maestra_tipos_entrada INT DEFAULT 1,
+            maestra_tipos_salida INT DEFAULT 1,
+            maestra_fabricantes INT DEFAULT 1,
+            maestra_unidades INT DEFAULT 1,
+            maestra_ubicaciones INT DEFAULT 1,
+            maestra_condiciones INT DEFAULT 1,
+            maestra_colores INT DEFAULT 1,
+            maestra_usuarios INT DEFAULT 1,
+            FOREIGN KEY (id_usuario) REFERENCES maestra_usuarios(id)
         )
     """)
-    _si_no_existe("inventario", """
-        CREATE TABLE inventario (
+    _si_no_existe("log_inventario", """
+        CREATE TABLE log_inventario (
             id INT IDENTITY(1,1) PRIMARY KEY,
             id_sustancia INT NOT NULL,
             id_ubicacion INT,
@@ -555,11 +633,11 @@ def _crear_tablas_sqlserver(conn) -> None:
             fecha_entrada NVARCHAR(30),
             factura NVARCHAR(MAX),
             observaciones NVARCHAR(MAX),
-            FOREIGN KEY (id_sustancia) REFERENCES maestras_sustancias(id)
+            FOREIGN KEY (id_sustancia) REFERENCES maestra_sustancias(id)
         )
     """)
-    _si_no_existe("entradas", """
-        CREATE TABLE entradas (
+    _si_no_existe("log_entradas", """
+        CREATE TABLE log_entradas (
             id INT IDENTITY(1,1) PRIMARY KEY,
             id_inventario INT NOT NULL,
             id_tipo_entrada INT NOT NULL,
@@ -568,13 +646,13 @@ def _crear_tablas_sqlserver(conn) -> None:
             cantidad FLOAT NOT NULL,
             observacion NVARCHAR(MAX),
             certificado INT DEFAULT 0,
-            FOREIGN KEY (id_inventario) REFERENCES inventario(id),
-            FOREIGN KEY (id_tipo_entrada) REFERENCES tipo_entrada(id),
-            FOREIGN KEY (id_usuario) REFERENCES usuarios(id)
+            FOREIGN KEY (id_inventario) REFERENCES log_inventario(id),
+            FOREIGN KEY (id_tipo_entrada) REFERENCES maestra_tipos_entrada(id),
+            FOREIGN KEY (id_usuario) REFERENCES maestra_usuarios(id)
         )
     """)
-    _si_no_existe("salidas", """
-        CREATE TABLE salidas (
+    _si_no_existe("log_salidas", """
+        CREATE TABLE log_salidas (
             id INT IDENTITY(1,1) PRIMARY KEY,
             id_inventario INT NOT NULL,
             id_tipo_salida INT NOT NULL,
@@ -586,13 +664,13 @@ def _crear_tablas_sqlserver(conn) -> None:
             actividad NVARCHAR(MAX),
             fecha_salida NVARCHAR(30),
             factura NVARCHAR(MAX),
-            FOREIGN KEY (id_inventario) REFERENCES inventario(id),
-            FOREIGN KEY (id_tipo_salida) REFERENCES tipo_salida(id),
-            FOREIGN KEY (id_usuario) REFERENCES usuarios(id)
+            FOREIGN KEY (id_inventario) REFERENCES log_inventario(id),
+            FOREIGN KEY (id_tipo_salida) REFERENCES maestra_tipos_salida(id),
+            FOREIGN KEY (id_usuario) REFERENCES maestra_usuarios(id)
         )
     """)
-    _si_no_existe("prestamos", """
-        CREATE TABLE prestamos (
+    _si_no_existe("log_prestamos", """
+        CREATE TABLE log_prestamos (
             id INT IDENTITY(1,1) PRIMARY KEY,
             id_inventario INT NOT NULL,
             id_usuario INT NOT NULL,
@@ -617,8 +695,8 @@ def _crear_tablas_sqlserver(conn) -> None:
             fecha_limite NVARCHAR(30)
         )
     """)
-    _si_no_existe("check_cecif", """
-        CREATE TABLE check_cecif (
+    _si_no_existe("log_check_cecif", """
+        CREATE TABLE log_check_cecif (
             id INT IDENTITY(1,1) PRIMARY KEY,
             id_entrada INT, id_usuario INT,
             fecha_hora NVARCHAR(30) NOT NULL,
@@ -636,8 +714,8 @@ def _crear_tablas_sqlserver(conn) -> None:
             ver_golpes_roturas NVARCHAR(20), ver_cumple_especificaciones NVARCHAR(20)
         )
     """)
-    _si_no_existe("check_clientes", """
-        CREATE TABLE check_clientes (
+    _si_no_existe("log_check_clientes", """
+        CREATE TABLE log_check_clientes (
             id INT IDENTITY(1,1) PRIMARY KEY,
             id_entrada INT, id_usuario INT,
             fecha_hora NVARCHAR(30) NOT NULL,
@@ -659,8 +737,8 @@ def _crear_tablas_sqlserver(conn) -> None:
             vd_condiciones_almacenamiento NVARCHAR(20), vd_carta_correo NVARCHAR(20)
         )
     """)
-    _si_no_existe("bitacora", """
-        CREATE TABLE bitacora (
+    _si_no_existe("log_bitacora", """
+        CREATE TABLE log_bitacora (
             id INT IDENTITY(1,1) PRIMARY KEY,
             fecha_hora NVARCHAR(30) NOT NULL,
             usuario NVARCHAR(100) NOT NULL,
@@ -682,50 +760,50 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
     conn.executescript(
         """
         -- 1. Catálogos base
-        CREATE TABLE IF NOT EXISTS fabricantes (
+        CREATE TABLE IF NOT EXISTS maestra_fabricantes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             fabricante TEXT UNIQUE NOT NULL,
             estado TEXT NOT NULL DEFAULT 'HABILITADA'
         );
 
-        CREATE TABLE IF NOT EXISTS unidad (
+        CREATE TABLE IF NOT EXISTS maestra_unidades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             unidad TEXT UNIQUE NOT NULL,
             estado TEXT NOT NULL DEFAULT 'HABILITADA'
         );
 
-        CREATE TABLE IF NOT EXISTS condicion_alm (
+        CREATE TABLE IF NOT EXISTS maestra_condiciones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             condicion TEXT UNIQUE NOT NULL,
             estado TEXT NOT NULL DEFAULT 'HABILITADA'
         );
 
-        CREATE TABLE IF NOT EXISTS color_refuerzo (
+        CREATE TABLE IF NOT EXISTS maestra_colores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             color_refuerzo TEXT UNIQUE NOT NULL,
             estado TEXT NOT NULL DEFAULT 'HABILITADA'
         );
 
-        CREATE TABLE IF NOT EXISTS tipo_entrada (
+        CREATE TABLE IF NOT EXISTS maestra_tipos_entrada (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tipo_entrada TEXT UNIQUE NOT NULL,
             estado TEXT NOT NULL DEFAULT 'HABILITADA'
         );
 
-        CREATE TABLE IF NOT EXISTS tipo_salida (
+        CREATE TABLE IF NOT EXISTS maestra_tipos_salida (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tipo_salida TEXT UNIQUE NOT NULL,
             estado TEXT NOT NULL DEFAULT 'HABILITADA'
         );
 
-        CREATE TABLE IF NOT EXISTS maestras_ubicaciones (
+        CREATE TABLE IF NOT EXISTS maestra_ubicaciones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ubicacion TEXT NOT NULL,
             no_caja TEXT NOT NULL,
             estado TEXT NOT NULL DEFAULT 'HABILITADA'
         );
 
-        CREATE TABLE IF NOT EXISTS maestras_sustancias (
+        CREATE TABLE IF NOT EXISTS maestra_sustancias (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             codigo TEXT UNIQUE NOT NULL,
             nombre TEXT NOT NULL,
@@ -738,7 +816,7 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
         );
 
         -- 2. Usuarios y permisos
-        CREATE TABLE IF NOT EXISTS usuarios (
+        CREATE TABLE IF NOT EXISTS maestra_usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             usuario TEXT UNIQUE NOT NULL,
             contrasena TEXT NOT NULL,
@@ -749,34 +827,34 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
             firma_password TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS permisos_usuario (
-            id_usuario INTEGER PRIMARY KEY REFERENCES usuarios(id) ON DELETE CASCADE,
-            entradas INTEGER DEFAULT 1,
-            salidas INTEGER DEFAULT 1,
-            inventario INTEGER DEFAULT 1,
-            bitacora INTEGER DEFAULT 1,
-            prestamos INTEGER DEFAULT 1,
+        CREATE TABLE IF NOT EXISTS maestra_permisos_usuario (
+            id_usuario INTEGER PRIMARY KEY REFERENCES maestra_usuarios(id) ON DELETE CASCADE,
+            log_entradas INTEGER DEFAULT 1,
+            log_salidas INTEGER DEFAULT 1,
+            log_inventario INTEGER DEFAULT 1,
+            log_bitacora INTEGER DEFAULT 1,
+            log_prestamos INTEGER DEFAULT 1,
             recibidos INTEGER DEFAULT 1,
-            sustancias INTEGER DEFAULT 1,
-            tipos_entrada INTEGER DEFAULT 1,
-            tipos_salida INTEGER DEFAULT 1,
-            fabricantes INTEGER DEFAULT 1,
-            unidades INTEGER DEFAULT 1,
-            ubicaciones INTEGER DEFAULT 1,
-            condiciones INTEGER DEFAULT 1,
-            colores INTEGER DEFAULT 1,
-            usuarios INTEGER DEFAULT 1
+            maestra_sustancias INTEGER DEFAULT 1,
+            maestra_tipos_entrada INTEGER DEFAULT 1,
+            maestra_tipos_salida INTEGER DEFAULT 1,
+            maestra_fabricantes INTEGER DEFAULT 1,
+            maestra_unidades INTEGER DEFAULT 1,
+            maestra_ubicaciones INTEGER DEFAULT 1,
+            maestra_condiciones INTEGER DEFAULT 1,
+            maestra_colores INTEGER DEFAULT 1,
+            maestra_usuarios INTEGER DEFAULT 1
         );
 
         -- 3. Inventario y movimientos
-        CREATE TABLE IF NOT EXISTS inventario (
+        CREATE TABLE IF NOT EXISTS log_inventario (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_sustancia INTEGER NOT NULL REFERENCES maestras_sustancias(id),
-            id_ubicacion INTEGER REFERENCES maestras_ubicaciones(id),
-            id_fabricante INTEGER REFERENCES fabricantes(id),
-            id_unidad INTEGER REFERENCES unidad(id),
-            id_condicion INTEGER REFERENCES condicion_alm(id),
-            id_color INTEGER REFERENCES color_refuerzo(id),
+            id_sustancia INTEGER NOT NULL REFERENCES maestra_sustancias(id),
+            id_ubicacion INTEGER REFERENCES maestra_ubicaciones(id),
+            id_fabricante INTEGER REFERENCES maestra_fabricantes(id),
+            id_unidad INTEGER REFERENCES maestra_unidades(id),
+            id_condicion INTEGER REFERENCES maestra_condiciones(id),
+            id_color INTEGER REFERENCES maestra_colores(id),
             lote TEXT,
             fecha_vencimiento TEXT,
             cantidad_actual REAL NOT NULL DEFAULT 0,
@@ -792,22 +870,22 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
             observaciones TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS entradas (
+        CREATE TABLE IF NOT EXISTS log_entradas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_inventario INTEGER NOT NULL REFERENCES inventario(id) ON DELETE RESTRICT,
-            id_tipo_entrada INTEGER NOT NULL REFERENCES tipo_entrada(id),
-            id_usuario INTEGER NOT NULL REFERENCES usuarios(id),
+            id_inventario INTEGER NOT NULL REFERENCES log_inventario(id) ON DELETE RESTRICT,
+            id_tipo_entrada INTEGER NOT NULL REFERENCES maestra_tipos_entrada(id),
+            id_usuario INTEGER NOT NULL REFERENCES maestra_usuarios(id),
             fecha_hora TEXT NOT NULL,
             cantidad REAL NOT NULL,
             observacion TEXT,
             certificado INTEGER DEFAULT 0
         );
 
-        CREATE TABLE IF NOT EXISTS salidas (
+        CREATE TABLE IF NOT EXISTS log_salidas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_inventario INTEGER NOT NULL REFERENCES inventario(id) ON DELETE RESTRICT,
-            id_tipo_salida INTEGER NOT NULL REFERENCES tipo_salida(id),
-            id_usuario INTEGER NOT NULL REFERENCES usuarios(id),
+            id_inventario INTEGER NOT NULL REFERENCES log_inventario(id) ON DELETE RESTRICT,
+            id_tipo_salida INTEGER NOT NULL REFERENCES maestra_tipos_salida(id),
+            id_usuario INTEGER NOT NULL REFERENCES maestra_usuarios(id),
             fecha_hora TEXT NOT NULL,
             cantidad REAL NOT NULL,
             observacion TEXT,
@@ -818,7 +896,7 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
         );
 
         -- 4. Préstamos
-        CREATE TABLE IF NOT EXISTS prestamos (
+        CREATE TABLE IF NOT EXISTS log_prestamos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             id_inventario INTEGER NOT NULL,
             id_usuario INTEGER NOT NULL,
@@ -826,7 +904,7 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
             cantidad REAL NOT NULL,
             solicitante TEXT,
             observacion TEXT,
-            estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+            estado TEXT NOT NULL DEFAULT 'SOLICITADO',
             fecha_devolucion TEXT,
             cantidad_devuelta REAL,
             observacion_devolucion TEXT,
@@ -840,11 +918,22 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
             id_salida_prestamo INTEGER,
             estado_devolucion TEXT NOT NULL DEFAULT 'NO_APLICA',
             id_usuario_devuelve INTEGER,
-            fecha_limite TEXT
+            fecha_limite TEXT,
+            fecha_ensayo TEXT,
+            no_control_actividad TEXT,
+            analisis_realizado TEXT,
+            cantidad_mg REAL,
+            firma_entregado_por TEXT,
+            id_usuario_entregador INTEGER,
+            firma_analista TEXT,
+            id_usuario_analista INTEGER,
+            firma_verificador TEXT,
+            id_usuario_verificador INTEGER,
+            observaciones_prestamo TEXT
         );
 
         -- 5. Checklists
-        CREATE TABLE IF NOT EXISTS check_cecif (
+        CREATE TABLE IF NOT EXISTS log_check_cecif (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             id_entrada INTEGER,
             id_usuario INTEGER,
@@ -875,7 +964,7 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
             ver_cumple_especificaciones TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS check_clientes (
+        CREATE TABLE IF NOT EXISTS log_check_clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             id_entrada INTEGER,
             id_usuario INTEGER,
@@ -914,7 +1003,7 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
         );
 
         -- 6. Bitácora
-        CREATE TABLE IF NOT EXISTS bitacora (
+        CREATE TABLE IF NOT EXISTS log_bitacora (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             fecha_hora TEXT NOT NULL,
             usuario TEXT NOT NULL,
@@ -932,14 +1021,14 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
 def _sembrar_admin_si_no_existe(conn, motor="sqlite"):
     """Inserta un admin por defecto en una base nueva sin usuarios."""
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM usuarios")
+    cursor.execute("SELECT COUNT(*) FROM maestra_usuarios")
     row = cursor.fetchone()
     total = int(row[0] if row else 0)
     if total > 0:
         return
 
     cursor.execute(
-        "INSERT INTO usuarios (usuario, contrasena, nombre, rol, estado) "
+        "INSERT INTO maestra_usuarios (usuario, contrasena, nombre, rol, estado) "
         "VALUES (?, ?, ?, ?, ?)",
         ("admin", "admin", "Administrador", "ADMIN", "HABILITADA"),
     )
@@ -952,10 +1041,10 @@ def _sembrar_admin_si_no_existe(conn, motor="sqlite"):
 
     if admin_id:
         cursor.execute(
-            "INSERT INTO permisos_usuario "
-            "(id_usuario, entradas, salidas, inventario, bitacora, prestamos, "
-            "recibidos, sustancias, tipos_entrada, tipos_salida, fabricantes, "
-            "unidades, ubicaciones, condiciones, colores, usuarios) "
+            "INSERT INTO maestra_permisos_usuario "
+            "(id_usuario, log_entradas, log_salidas, log_inventario, log_bitacora, log_prestamos, "
+            "recibidos, maestra_sustancias, maestra_tipos_entrada, maestra_tipos_salida, maestra_fabricantes, "
+            "maestra_unidades, maestra_ubicaciones, maestra_condiciones, maestra_colores, maestra_usuarios) "
             "VALUES (?,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1)",
             (admin_id,),
         )
@@ -1021,12 +1110,12 @@ class KardexDB:
             """
             SELECT u.id, u.usuario, u.contrasena, u.nombre, u.rol, u.estado,
                    u.firma_path, u.firma_password,
-                   p.entradas, p.salidas, p.inventario, p.bitacora, p.prestamos,
-                   p.recibidos, p.sustancias, p.tipos_entrada, p.tipos_salida,
-                   p.fabricantes, p.unidades, p.ubicaciones, p.condiciones,
-                   p.colores, p.usuarios
-              FROM usuarios u
-              LEFT JOIN permisos_usuario p ON p.id_usuario = u.id
+                   p.log_entradas, p.log_salidas, p.log_inventario, p.log_bitacora, p.log_prestamos,
+                   p.recibidos, p.maestra_sustancias, p.maestra_tipos_entrada, p.maestra_tipos_salida,
+                   p.maestra_fabricantes, p.maestra_unidades, p.maestra_ubicaciones, p.maestra_condiciones,
+                   p.maestra_colores, p.maestra_usuarios
+              FROM maestra_usuarios u
+              LEFT JOIN maestra_permisos_usuario p ON p.id_usuario = u.id
              WHERE u.usuario = ? AND u.contrasena = ? AND u.estado = 'HABILITADA'
             """,
             (usuario, contrasena),
@@ -1041,12 +1130,12 @@ class KardexDB:
             """
             SELECT u.id, u.usuario, u.contrasena, u.nombre, u.rol, u.estado,
                    u.firma_path, u.firma_password,
-                   p.entradas, p.salidas, p.inventario, p.bitacora, p.prestamos,
-                   p.recibidos, p.sustancias, p.tipos_entrada, p.tipos_salida,
-                   p.fabricantes, p.unidades, p.ubicaciones, p.condiciones,
-                   p.colores, p.usuarios
-              FROM usuarios u
-              LEFT JOIN permisos_usuario p ON p.id_usuario = u.id
+                   p.log_entradas, p.log_salidas, p.log_inventario, p.log_bitacora, p.log_prestamos,
+                   p.recibidos, p.maestra_sustancias, p.maestra_tipos_entrada, p.maestra_tipos_salida,
+                   p.maestra_fabricantes, p.maestra_unidades, p.maestra_ubicaciones, p.maestra_condiciones,
+                   p.maestra_colores, p.maestra_usuarios
+              FROM maestra_usuarios u
+              LEFT JOIN maestra_permisos_usuario p ON p.id_usuario = u.id
              ORDER BY u.nombre
             """
         )
@@ -1059,9 +1148,10 @@ class KardexDB:
     def _normalizar_usuario(self, u: dict) -> dict:
         """Construye la estructura {id, usuario, nombre, rol, estado, permisos}."""
         _PERM_CAMPOS = [
-            "entradas", "salidas", "inventario", "bitacora", "prestamos",
-            "recibidos", "sustancias", "tipos_entrada", "tipos_salida",
-            "fabricantes", "unidades", "ubicaciones", "condiciones", "colores", "usuarios",
+            "log_entradas", "log_salidas", "log_inventario", "log_bitacora", "log_prestamos",
+            "recibidos", "maestra_sustancias", "maestra_tipos_entrada", "maestra_tipos_salida",
+            "maestra_fabricantes", "maestra_unidades", "maestra_ubicaciones", "maestra_condiciones",
+            "maestra_colores", "maestra_usuarios",
         ]
         permisos = {c: bool(u.get(c, False)) for c in _PERM_CAMPOS}
         permisos["firma_path"] = u.get("firma_path") or ""
@@ -1079,7 +1169,7 @@ class KardexDB:
     def crear_usuario(self, datos: dict) -> int:
         ph = self._ph()
         uid = self._insert(
-            f"""INSERT INTO usuarios
+            f"""INSERT INTO maestra_usuarios
                 (usuario, contrasena, nombre, rol, estado, firma_path, firma_password)
                 VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
             (
@@ -1095,7 +1185,7 @@ class KardexDB:
     def actualizar_usuario(self, id_usuario: int, datos: dict):
         ph = self._ph()
         self._execute(
-            f"""UPDATE usuarios SET nombre={ph}, rol={ph}, estado={ph},
+            f"""UPDATE maestra_usuarios SET nombre={ph}, rol={ph}, estado={ph},
                 firma_path={ph}, firma_password={ph} WHERE id={ph}""",
             (
                 datos["nombre"], datos.get("rol", ""),
@@ -1107,7 +1197,7 @@ class KardexDB:
         )
         if datos.get("contrasena"):
             self._execute(
-                f"UPDATE usuarios SET contrasena={ph} WHERE id={ph}",
+                f"UPDATE maestra_usuarios SET contrasena={ph} WHERE id={ph}",
                 (datos["contrasena"], id_usuario),
             )
         if "permisos" in datos:
@@ -1117,7 +1207,7 @@ class KardexDB:
     def habilitar_usuario(self, id_usuario: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE usuarios SET estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_usuarios SET estado={ph} WHERE id={ph}",
             ("HABILITADA", id_usuario),
         )
         self.commit()
@@ -1125,23 +1215,24 @@ class KardexDB:
     def inhabilitar_usuario(self, id_usuario: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE usuarios SET estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_usuarios SET estado={ph} WHERE id={ph}",
             ("DESHABILITADA", id_usuario),
         )
         self.commit()
 
     def _insertar_permisos(self, id_usuario: int, permisos: dict):
         campos = [
-            "entradas", "salidas", "inventario", "bitacora", "prestamos",
-            "recibidos", "sustancias", "tipos_entrada", "tipos_salida",
-            "fabricantes", "unidades", "ubicaciones", "condiciones", "colores", "usuarios",
+            "log_entradas", "log_salidas", "log_inventario", "log_bitacora", "log_prestamos",
+            "recibidos", "maestra_sustancias", "maestra_tipos_entrada", "maestra_tipos_salida",
+            "maestra_fabricantes", "maestra_unidades", "maestra_ubicaciones", "maestra_condiciones",
+            "maestra_colores", "maestra_usuarios",
         ]
         vals = [int(bool(permisos.get(c, False))) for c in campos]
         ph = self._ph()
         cols = ",".join(campos)
         phs = ",".join([ph] * len(campos))
         self._execute(
-            f"INSERT INTO permisos_usuario (id_usuario,{cols}) VALUES ({ph},{phs})",
+            f"INSERT INTO maestra_permisos_usuario (id_usuario,{cols}) VALUES ({ph},{phs})",
             (id_usuario, *vals),
         )
         self.commit()
@@ -1149,14 +1240,15 @@ class KardexDB:
     def _actualizar_permisos(self, id_usuario: int, permisos: dict):
         ph = self._ph()
         campos = [
-            "entradas", "salidas", "inventario", "bitacora", "prestamos",
-            "recibidos", "sustancias", "tipos_entrada", "tipos_salida",
-            "fabricantes", "unidades", "ubicaciones", "condiciones", "colores", "usuarios",
+            "log_entradas", "log_salidas", "log_inventario", "log_bitacora", "log_prestamos",
+            "recibidos", "maestra_sustancias", "maestra_tipos_entrada", "maestra_tipos_salida",
+            "maestra_fabricantes", "maestra_unidades", "maestra_ubicaciones", "maestra_condiciones",
+            "maestra_colores", "maestra_usuarios",
         ]
         sets = ", ".join([f"{c}={ph}" for c in campos])
         vals = [int(bool(permisos.get(c, False))) for c in campos]
         self._execute(
-            f"UPDATE permisos_usuario SET {sets} WHERE id_usuario={ph}",
+            f"UPDATE maestra_permisos_usuario SET {sets} WHERE id_usuario={ph}",
             (*vals, id_usuario),
         )
         self.commit()
@@ -1168,138 +1260,138 @@ class KardexDB:
     # ── Fabricantes ─────────────────────────────────────────────────────────
 
     def get_fabricantes(self) -> list:
-        rows = self._fetchall("SELECT * FROM fabricantes ORDER BY fabricante")
+        rows = self._fetchall("SELECT * FROM maestra_fabricantes ORDER BY fabricante")
         for r in rows:
             r.setdefault("estado", "HABILITADA")
         return rows
 
     def crear_fabricante(self, nombre: str) -> int:
         return self._insert(
-            f"INSERT INTO fabricantes (fabricante, estado) VALUES ({self._ph()},{self._ph()})",
+            f"INSERT INTO maestra_fabricantes (fabricante, estado) VALUES ({self._ph()},{self._ph()})",
             (nombre, "HABILITADA"),
         )
 
     def actualizar_fabricante(self, id_: int, nombre: str):
         ph = self._ph()
         self._execute(
-            f"UPDATE fabricantes SET fabricante={ph} WHERE id={ph}", (nombre, id_)
+            f"UPDATE maestra_fabricantes SET fabricante={ph} WHERE id={ph}", (nombre, id_)
         )
         self.commit()
 
     def habilitar_fabricante(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE fabricantes SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
+            f"UPDATE maestra_fabricantes SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
         )
         self.commit()
 
     def inhabilitar_fabricante(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE fabricantes SET estado={ph} WHERE id={ph}", ("INHABILITADA", id_)
+            f"UPDATE maestra_fabricantes SET estado={ph} WHERE id={ph}", ("INHABILITADA", id_)
         )
         self.commit()
 
     # ── Unidades ────────────────────────────────────────────────────────────
 
     def get_unidades(self) -> list:
-        rows = self._fetchall("SELECT * FROM unidad ORDER BY unidad")
+        rows = self._fetchall("SELECT * FROM maestra_unidades ORDER BY unidad")
         for r in rows:
             r.setdefault("estado", "HABILITADA")
         return rows
 
     def crear_unidad(self, nombre: str) -> int:
         return self._insert(
-            f"INSERT INTO unidad (unidad, estado) VALUES ({self._ph()},{self._ph()})",
+            f"INSERT INTO maestra_unidades (unidad, estado) VALUES ({self._ph()},{self._ph()})",
             (nombre, "HABILITADA"),
         )
 
     def actualizar_unidad(self, id_: int, nombre: str):
         ph = self._ph()
-        self._execute(f"UPDATE unidad SET unidad={ph} WHERE id={ph}", (nombre, id_))
+        self._execute(f"UPDATE maestra_unidades SET unidad={ph} WHERE id={ph}", (nombre, id_))
         self.commit()
 
     def habilitar_unidad(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE unidad SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
+            f"UPDATE maestra_unidades SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
         )
         self.commit()
 
     def inhabilitar_unidad(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE unidad SET estado={ph} WHERE id={ph}", ("INHABILITADA", id_)
+            f"UPDATE maestra_unidades SET estado={ph} WHERE id={ph}", ("INHABILITADA", id_)
         )
         self.commit()
 
     # ── Condiciones ─────────────────────────────────────────────────────────
 
     def get_condiciones(self) -> list:
-        rows = self._fetchall("SELECT * FROM condicion_alm ORDER BY condicion")
+        rows = self._fetchall("SELECT * FROM maestra_condiciones ORDER BY condicion")
         for r in rows:
             r.setdefault("estado", "HABILITADA")
         return rows
 
     def crear_condicion(self, condicion: str) -> int:
         return self._insert(
-            f"INSERT INTO condicion_alm (condicion, estado) VALUES ({self._ph()},{self._ph()})",
+            f"INSERT INTO maestra_condiciones (condicion, estado) VALUES ({self._ph()},{self._ph()})",
             (condicion, "HABILITADA"),
         )
 
     def actualizar_condicion(self, id_: int, condicion: str):
         ph = self._ph()
         self._execute(
-            f"UPDATE condicion_alm SET condicion={ph} WHERE id={ph}", (condicion, id_)
+            f"UPDATE maestra_condiciones SET condicion={ph} WHERE id={ph}", (condicion, id_)
         )
         self.commit()
 
     def habilitar_condicion(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE condicion_alm SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
+            f"UPDATE maestra_condiciones SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
         )
         self.commit()
 
     def inhabilitar_condicion(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE condicion_alm SET estado={ph} WHERE id={ph}", ("INHABILITADA", id_)
+            f"UPDATE maestra_condiciones SET estado={ph} WHERE id={ph}", ("INHABILITADA", id_)
         )
         self.commit()
 
     # ── Colores ─────────────────────────────────────────────────────────────
 
     def get_colores(self) -> list:
-        rows = self._fetchall("SELECT * FROM color_refuerzo ORDER BY color_refuerzo")
+        rows = self._fetchall("SELECT * FROM maestra_colores ORDER BY color_refuerzo")
         for r in rows:
             r.setdefault("estado", "HABILITADA")
         return rows
 
     def crear_color(self, color: str) -> int:
         return self._insert(
-            f"INSERT INTO color_refuerzo (color_refuerzo, estado) VALUES ({self._ph()},{self._ph()})",
+            f"INSERT INTO maestra_colores (color_refuerzo, estado) VALUES ({self._ph()},{self._ph()})",
             (color, "HABILITADA"),
         )
 
     def actualizar_color(self, id_: int, color: str):
         ph = self._ph()
         self._execute(
-            f"UPDATE color_refuerzo SET color_refuerzo={ph} WHERE id={ph}", (color, id_)
+            f"UPDATE maestra_colores SET color_refuerzo={ph} WHERE id={ph}", (color, id_)
         )
         self.commit()
 
     def habilitar_color(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE color_refuerzo SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
+            f"UPDATE maestra_colores SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
         )
         self.commit()
 
     def inhabilitar_color(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE color_refuerzo SET estado={ph} WHERE id={ph}", ("INHABILITADA", id_)
+            f"UPDATE maestra_colores SET estado={ph} WHERE id={ph}", ("INHABILITADA", id_)
         )
         self.commit()
 
@@ -1307,9 +1399,9 @@ class KardexDB:
 
     def get_tipos_entrada(self, solo_habilitados: bool = False) -> list:
         sql = (
-            "SELECT * FROM tipo_entrada WHERE estado='HABILITADA' ORDER BY tipo_entrada"
+            "SELECT * FROM maestra_tipos_entrada WHERE estado='HABILITADA' ORDER BY tipo_entrada"
             if solo_habilitados
-            else "SELECT * FROM tipo_entrada ORDER BY tipo_entrada"
+            else "SELECT * FROM maestra_tipos_entrada ORDER BY tipo_entrada"
         )
         rows = self._fetchall(sql)
         for r in rows:
@@ -1318,14 +1410,14 @@ class KardexDB:
 
     def crear_tipo_entrada(self, tipo: str) -> int:
         return self._insert(
-            f"INSERT INTO tipo_entrada (tipo_entrada, estado) VALUES ({self._ph()},{self._ph()})",
+            f"INSERT INTO maestra_tipos_entrada (tipo_entrada, estado) VALUES ({self._ph()},{self._ph()})",
             (tipo, "HABILITADA"),
         )
 
     def actualizar_tipo_entrada(self, id_: int, tipo: str, estado: str):
         ph = self._ph()
         self._execute(
-            f"UPDATE tipo_entrada SET tipo_entrada={ph}, estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_tipos_entrada SET tipo_entrada={ph}, estado={ph} WHERE id={ph}",
             (tipo, _a_db_estado(estado), id_),
         )
         self.commit()
@@ -1333,14 +1425,14 @@ class KardexDB:
     def habilitar_tipo_entrada(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE tipo_entrada SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
+            f"UPDATE maestra_tipos_entrada SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
         )
         self.commit()
 
     def inhabilitar_tipo_entrada(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE tipo_entrada SET estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_tipos_entrada SET estado={ph} WHERE id={ph}",
             ("DESHABILITADA", id_),
         )
         self.commit()
@@ -1349,9 +1441,9 @@ class KardexDB:
 
     def get_tipos_salida(self, solo_habilitados: bool = False) -> list:
         sql = (
-            "SELECT * FROM tipo_salida WHERE estado='HABILITADA' ORDER BY tipo_salida"
+            "SELECT * FROM maestra_tipos_salida WHERE estado='HABILITADA' ORDER BY tipo_salida"
             if solo_habilitados
-            else "SELECT * FROM tipo_salida ORDER BY tipo_salida"
+            else "SELECT * FROM maestra_tipos_salida ORDER BY tipo_salida"
         )
         rows = self._fetchall(sql)
         for r in rows:
@@ -1360,14 +1452,14 @@ class KardexDB:
 
     def crear_tipo_salida(self, tipo: str) -> int:
         return self._insert(
-            f"INSERT INTO tipo_salida (tipo_salida, estado) VALUES ({self._ph()},{self._ph()})",
+            f"INSERT INTO maestra_tipos_salida (tipo_salida, estado) VALUES ({self._ph()},{self._ph()})",
             (tipo, "HABILITADA"),
         )
 
     def actualizar_tipo_salida(self, id_: int, tipo: str, estado: str):
         ph = self._ph()
         self._execute(
-            f"UPDATE tipo_salida SET tipo_salida={ph}, estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_tipos_salida SET tipo_salida={ph}, estado={ph} WHERE id={ph}",
             (tipo, _a_db_estado(estado), id_),
         )
         self.commit()
@@ -1375,14 +1467,14 @@ class KardexDB:
     def habilitar_tipo_salida(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE tipo_salida SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
+            f"UPDATE maestra_tipos_salida SET estado={ph} WHERE id={ph}", ("HABILITADA", id_)
         )
         self.commit()
 
     def inhabilitar_tipo_salida(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE tipo_salida SET estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_tipos_salida SET estado={ph} WHERE id={ph}",
             ("DESHABILITADA", id_),
         )
         self.commit()
@@ -1391,7 +1483,7 @@ class KardexDB:
 
     def get_ubicaciones(self) -> list:
         rows = self._fetchall(
-            "SELECT * FROM maestras_ubicaciones ORDER BY ubicacion, no_caja"
+            "SELECT * FROM maestra_ubicaciones ORDER BY ubicacion, no_caja"
         )
         for r in rows:
             r.setdefault("estado", "HABILITADA")
@@ -1399,14 +1491,14 @@ class KardexDB:
 
     def crear_ubicacion(self, ubicacion: str, no_caja: str) -> int:
         return self._insert(
-            f"INSERT INTO maestras_ubicaciones (ubicacion, no_caja, estado) VALUES ({self._ph()},{self._ph()},{self._ph()})",
+            f"INSERT INTO maestra_ubicaciones (ubicacion, no_caja, estado) VALUES ({self._ph()},{self._ph()},{self._ph()})",
             (ubicacion, no_caja, "HABILITADA"),
         )
 
     def actualizar_ubicacion(self, id_: int, ubicacion: str, no_caja: str):
         ph = self._ph()
         self._execute(
-            f"UPDATE maestras_ubicaciones SET ubicacion={ph}, no_caja={ph} WHERE id={ph}",
+            f"UPDATE maestra_ubicaciones SET ubicacion={ph}, no_caja={ph} WHERE id={ph}",
             (ubicacion, no_caja, id_),
         )
         self.commit()
@@ -1414,7 +1506,7 @@ class KardexDB:
     def habilitar_ubicacion(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE maestras_ubicaciones SET estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_ubicaciones SET estado={ph} WHERE id={ph}",
             ("HABILITADA", id_),
         )
         self.commit()
@@ -1422,7 +1514,7 @@ class KardexDB:
     def inhabilitar_ubicacion(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE maestras_ubicaciones SET estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_ubicaciones SET estado={ph} WHERE id={ph}",
             ("INHABILITADA", id_),
         )
         self.commit()
@@ -1433,7 +1525,7 @@ class KardexDB:
 
     def get_sustancias(self) -> list:
         rows = self._fetchall(
-            "SELECT * FROM maestras_sustancias ORDER BY nombre"
+            "SELECT * FROM maestra_sustancias ORDER BY nombre"
         )
         for r in rows:
             r.setdefault("estado", "HABILITADA")
@@ -1441,7 +1533,7 @@ class KardexDB:
 
     def get_sustancia(self, id_sustancia: int) -> Optional[dict]:
         r = self._fetchone(
-            f"SELECT * FROM maestras_sustancias WHERE id={self._ph()}",
+            f"SELECT * FROM maestra_sustancias WHERE id={self._ph()}",
             (id_sustancia,),
         )
         if r:
@@ -1451,7 +1543,7 @@ class KardexDB:
     def crear_sustancia(self, datos: dict) -> int:
         ph = self._ph()
         return self._insert(
-            f"""INSERT INTO maestras_sustancias
+            f"""INSERT INTO maestra_sustancias
                 (codigo, nombre, propiedad, tipo_muestras, uso_previsto,
                  cantidad_minima, codigo_sistema, estado)
                 VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
@@ -1468,7 +1560,7 @@ class KardexDB:
     def actualizar_sustancia(self, id_s: int, datos: dict):
         ph = self._ph()
         self._execute(
-            f"""UPDATE maestras_sustancias SET
+            f"""UPDATE maestra_sustancias SET
                 codigo={ph}, nombre={ph}, propiedad={ph}, tipo_muestras={ph},
                 uso_previsto={ph}, cantidad_minima={ph}, codigo_sistema={ph}
                 WHERE id={ph}""",
@@ -1485,7 +1577,7 @@ class KardexDB:
     def habilitar_sustancia(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE maestras_sustancias SET estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_sustancias SET estado={ph} WHERE id={ph}",
             ("HABILITADA", id_),
         )
         self.commit()
@@ -1493,7 +1585,7 @@ class KardexDB:
     def inhabilitar_sustancia(self, id_: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE maestras_sustancias SET estado={ph} WHERE id={ph}",
+            f"UPDATE maestra_sustancias SET estado={ph} WHERE id={ph}",
             ("INHABILITADA", id_),
         )
         self.commit()
@@ -1519,13 +1611,13 @@ class KardexDB:
                    cr.color_refuerzo,
                    ub.ubicacion,
                    ub.no_caja
-              FROM inventario i
-              JOIN maestras_sustancias s  ON s.id  = i.id_sustancia
-              LEFT JOIN fabricantes f     ON f.id  = i.id_fabricante
-              LEFT JOIN unidad u          ON u.id  = i.id_unidad
-              LEFT JOIN condicion_alm c   ON c.id  = i.id_condicion
-              LEFT JOIN color_refuerzo cr ON cr.id = i.id_color
-              LEFT JOIN maestras_ubicaciones ub ON ub.id = i.id_ubicacion
+              FROM log_inventario i
+              JOIN maestra_sustancias s  ON s.id  = i.id_sustancia
+              LEFT JOIN maestra_fabricantes f     ON f.id  = i.id_fabricante
+              LEFT JOIN maestra_unidades u          ON u.id  = i.id_unidad
+              LEFT JOIN maestra_condiciones c   ON c.id  = i.id_condicion
+              LEFT JOIN maestra_colores cr ON cr.id = i.id_color
+              LEFT JOIN maestra_ubicaciones ub ON ub.id = i.id_ubicacion
              ORDER BY s.nombre
         """)
         for r in rows:
@@ -1550,9 +1642,9 @@ class KardexDB:
     def get_inventario_bajo_minimo(self) -> list:
         return self._fetchall("""
             SELECT i.*, s.nombre, s.cantidad_minima, u.unidad
-              FROM inventario i
-              JOIN maestras_sustancias s ON s.id = i.id_sustancia
-              LEFT JOIN unidad u ON u.id = i.id_unidad
+              FROM log_inventario i
+              JOIN maestra_sustancias s ON s.id = i.id_sustancia
+              LEFT JOIN maestra_unidades u ON u.id = i.id_unidad
              WHERE i.cantidad_actual < s.cantidad_minima
                AND i.estado = 'ACTIVO'
         """)
@@ -1561,7 +1653,7 @@ class KardexDB:
         """Crea un registro de inventario (item/lote) y devuelve su id."""
         ph = self._ph()
         return self._insert(
-            f"""INSERT INTO inventario
+            f"""INSERT INTO log_inventario
                 (id_sustancia, id_ubicacion, id_fabricante, id_unidad,
                  id_condicion, id_color, lote, fecha_vencimiento,
                  cantidad_actual, estado,
@@ -1597,7 +1689,7 @@ class KardexDB:
         """Actualiza campos editables de un item de inventario."""
         ph = self._ph()
         self._execute(
-            f"""UPDATE inventario SET
+            f"""UPDATE log_inventario SET
                 id_sustancia={ph}, id_ubicacion={ph}, id_fabricante={ph},
                 id_unidad={ph}, id_condicion={ph}, id_color={ph},
                 lote={ph}, fecha_vencimiento={ph},
@@ -1635,7 +1727,7 @@ class KardexDB:
         else:
             estado = "ACTIVO"
         self._execute(
-            f"UPDATE inventario SET cantidad_actual={ph}, estado={ph} WHERE id={ph}",
+            f"UPDATE log_inventario SET cantidad_actual={ph}, estado={ph} WHERE id={ph}",
             (nueva_cantidad, estado, id_inventario),
         )
         self.commit()
@@ -1643,7 +1735,7 @@ class KardexDB:
     def anular_inventario(self, id_inv: int):
         ph = self._ph()
         self._execute(
-            f"UPDATE inventario SET estado={ph} WHERE id={ph}", ("ANULADO", id_inv)
+            f"UPDATE log_inventario SET estado={ph} WHERE id={ph}", ("ANULADO", id_inv)
         )
         self.commit()
 
@@ -1659,11 +1751,11 @@ class KardexDB:
                    te.tipo_entrada,
                    u.usuario     AS usuario_nombre,
                    i.cantidad_actual
-              FROM entradas e
-              JOIN inventario i          ON i.id  = e.id_inventario
-              JOIN maestras_sustancias s ON s.id  = i.id_sustancia
-              JOIN tipo_entrada te       ON te.id = e.id_tipo_entrada
-              JOIN usuarios u            ON u.id  = e.id_usuario
+              FROM log_entradas e
+              JOIN log_inventario i          ON i.id  = e.id_inventario
+              JOIN maestra_sustancias s ON s.id  = i.id_sustancia
+              JOIN maestra_tipos_entrada te       ON te.id = e.id_tipo_entrada
+              JOIN maestra_usuarios u            ON u.id  = e.id_usuario
              ORDER BY e.fecha_hora DESC
         """)
 
@@ -1674,7 +1766,7 @@ class KardexDB:
         """
         ph = self._ph()
         id_entrada = self._insert(
-            f"""INSERT INTO entradas
+            f"""INSERT INTO log_entradas
                 (id_inventario, id_tipo_entrada, id_usuario,
                  fecha_hora, cantidad, observacion, certificado)
                 VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
@@ -1687,7 +1779,7 @@ class KardexDB:
             ),
         )
         inv = self._fetchone(
-            f"SELECT cantidad_actual FROM inventario WHERE id={ph}",
+            f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
             (datos["id_inventario"],),
         )
         nueva = (inv["cantidad_actual"] or 0) + float(datos["cantidad"])
@@ -1707,11 +1799,11 @@ class KardexDB:
                    u.usuario     AS usuario_nombre,
                    i.id_sustancia,
                    i.lote
-              FROM salidas sa
-              JOIN inventario i          ON i.id  = sa.id_inventario
-              JOIN maestras_sustancias s ON s.id  = i.id_sustancia
-              JOIN tipo_salida ts        ON ts.id = sa.id_tipo_salida
-              JOIN usuarios u            ON u.id  = sa.id_usuario
+              FROM log_salidas sa
+              JOIN log_inventario i          ON i.id  = sa.id_inventario
+              JOIN maestra_sustancias s ON s.id  = i.id_sustancia
+              JOIN maestra_tipos_salida ts        ON ts.id = sa.id_tipo_salida
+              JOIN maestra_usuarios u            ON u.id  = sa.id_usuario
              ORDER BY sa.fecha_hora DESC
         """)
         for r in rows:
@@ -1726,7 +1818,7 @@ class KardexDB:
         """
         ph = self._ph()
         inv = self._fetchone(
-            f"SELECT cantidad_actual FROM inventario WHERE id={ph}",
+            f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
             (datos.get("id_inventario") or datos.get("id_entrada"),),
         )
         id_inv = datos.get("id_inventario") or datos.get("id_entrada")
@@ -1734,7 +1826,7 @@ class KardexDB:
             raise ValueError("Stock insuficiente para realizar la salida.")
 
         id_salida = self._insert(
-            f"""INSERT INTO salidas
+            f"""INSERT INTO log_salidas
                 (id_inventario, id_tipo_salida, id_usuario,
                  fecha_hora, cantidad, observacion,
                  estado, actividad, fecha_salida, factura)
@@ -1759,7 +1851,7 @@ class KardexDB:
     def actualizar_salida(self, id_salida: int, datos: dict):
         ph = self._ph()
         self._execute(
-            f"""UPDATE salidas SET
+            f"""UPDATE log_salidas SET
                 actividad={ph}, observacion={ph}, fecha_salida={ph}
                 WHERE id={ph}""",
             (datos.get("actividad"), datos.get("observacion"),
@@ -1771,15 +1863,15 @@ class KardexDB:
         """Anula la salida y restaura el stock."""
         ph = self._ph()
         salida = self._fetchone(
-            f"SELECT * FROM salidas WHERE id={ph}", (id_salida,)
+            f"SELECT * FROM log_salidas WHERE id={ph}", (id_salida,)
         )
         if not salida or salida.get("estado") == "ANULADA":
             return
         self._execute(
-            f"UPDATE salidas SET estado={ph} WHERE id={ph}", ("ANULADA", id_salida)
+            f"UPDATE log_salidas SET estado={ph} WHERE id={ph}", ("ANULADA", id_salida)
         )
         inv = self._fetchone(
-            f"SELECT cantidad_actual FROM inventario WHERE id={ph}",
+            f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
             (salida["id_inventario"],),
         )
         if inv:
@@ -1793,20 +1885,37 @@ class KardexDB:
     def _enriquecer_prestamo(self, p: dict) -> dict:
         """Añade nombre de sustancia, lote y nombres de usuario al prestamo."""
         inv = self._fetchone(
-            f"SELECT i.*, s.nombre AS sustancia, s.codigo, un.unidad FROM inventario i "
-            f"JOIN maestras_sustancias s ON s.id=i.id_sustancia "
-            f"LEFT JOIN unidad un ON un.id=i.id_unidad "
+            f"SELECT i.*, s.nombre AS sustancia, s.codigo, s.propiedad, "
+            f"un.unidad, f.fabricante AS fabricante_nombre, "
+            f"u.ubicacion, u.no_caja "
+            f"FROM log_inventario i "
+            f"JOIN maestra_sustancias s ON s.id=i.id_sustancia "
+            f"LEFT JOIN maestra_unidades un ON un.id=i.id_unidad "
+            f"LEFT JOIN maestra_fabricantes f ON f.id=i.id_fabricante "
+            f"LEFT JOIN maestra_ubicaciones u ON u.id=i.id_ubicacion "
             f"WHERE i.id={self._ph()}",
             (p.get("id_inventario"),),
         ) or {}
         presta = self._fetchone(
-            f"SELECT nombre, usuario FROM usuarios WHERE id={self._ph()}",
+            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
             (p.get("id_usuario"),),
         ) or {}
         destino = self._fetchone(
-            f"SELECT nombre, usuario FROM usuarios WHERE id={self._ph()}",
+            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
             (p.get("id_usuario_destino"),),
         ) or {}
+        entregador = self._fetchone(
+            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
+            (p.get("id_usuario_entregador"),),
+        ) or {} if p.get("id_usuario_entregador") else {}
+        analista = self._fetchone(
+            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
+            (p.get("id_usuario_analista"),),
+        ) or {} if p.get("id_usuario_analista") else {}
+        verificador = self._fetchone(
+            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
+            (p.get("id_usuario_verificador"),),
+        ) or {} if p.get("id_usuario_verificador") else {}
         return {
             **p,
             "id_entrada": p.get("id_inventario"),
@@ -1815,22 +1924,47 @@ class KardexDB:
             "codigo": inv.get("codigo", ""),
             "nombre": inv.get("sustancia", ""),
             "lote": inv.get("lote", ""),
-            "unidad": inv.get("unidad", ""),
+            "fecha_vencimiento": inv.get("fecha_vencimiento", ""),
+            "potencia": inv.get("potencia", ""),
+            "propiedad": inv.get("propiedad", ""),
+            "fabricante_nombre": inv.get("fabricante_nombre", ""),
+            "ubicacion": inv.get("ubicacion", ""),
+            "no_caja": inv.get("no_caja", ""),
+            "maestra_unidades": inv.get("maestra_unidades", ""),
             "id_usuario_presta": p.get("id_usuario"),
             "usuario_presta_nombre": presta.get("nombre") or presta.get("usuario", ""),
             "usuario_destino_nombre": destino.get("nombre") or destino.get("usuario", ""),
+            "usuario_entregador_nombre": entregador.get("nombre") or entregador.get("usuario", ""),
+            "usuario_analista_nombre": analista.get("nombre") or analista.get("usuario", ""),
+            "usuario_verificador_nombre": verificador.get("nombre") or verificador.get("usuario", ""),
             "fecha_prestamo": p.get("fecha_prestamo") or p.get("fecha_hora", "")[:10],
         }
 
     def get_prestamos(self) -> list:
         rows = self._fetchall(
-            "SELECT * FROM prestamos ORDER BY fecha_hora DESC"
+            "SELECT * FROM log_prestamos ORDER BY fecha_hora DESC"
+        )
+        return [self._enriquecer_prestamo(p) for p in rows]
+
+    def get_prestamos_activos(self) -> list:
+        """Préstamos en estado SOLICITADO o PRESTADO."""
+        rows = self._fetchall(
+            f"SELECT * FROM log_prestamos WHERE estado IN ({self._ph()},{self._ph()}) ORDER BY fecha_hora DESC",
+            ("SOLICITADO", "PRESTADO"),
+        )
+        return [self._enriquecer_prestamo(p) for p in rows]
+
+    def get_prestamos_completados(self) -> list:
+        """Préstamos en estado DEVUELTO (historial)."""
+        rows = self._fetchall(
+            f"SELECT * FROM log_prestamos WHERE estado={self._ph()} ORDER BY fecha_hora DESC",
+            ("DEVUELTO",),
         )
         return [self._enriquecer_prestamo(p) for p in rows]
 
     def get_prestamos_emitidos(self, id_usuario: int, mes: str = "", limit: int = 15) -> list:
         rows = self._fetchall(
-            f"SELECT * FROM prestamos WHERE id_usuario={self._ph()} ORDER BY fecha_hora DESC",
+            f"SELECT * FROM log_prestamos WHERE id_usuario={self._ph()} ORDER BY fecha_hora DESC",
             (id_usuario,),
         )
         if mes:
@@ -1841,28 +1975,28 @@ class KardexDB:
 
     def get_prestamos_pendientes_para(self, id_usuario_destino: int) -> list:
         rows = self._fetchall(
-            f"SELECT * FROM prestamos WHERE id_usuario_destino={self._ph()} AND estado='PENDIENTE' ORDER BY fecha_hora DESC",
+            f"SELECT * FROM log_prestamos WHERE id_usuario_destino={self._ph()} AND estado='PENDIENTE' ORDER BY fecha_hora DESC",
             (id_usuario_destino,),
         )
         return [self._enriquecer_prestamo(p) for p in rows]
 
     def get_recibidos_pendientes_para(self, id_usuario_destino: int) -> list:
         rows = self._fetchall(
-            f"SELECT * FROM prestamos WHERE id_usuario_destino={self._ph()} AND estado_recepcion='PENDIENTE' ORDER BY fecha_hora DESC",
+            f"SELECT * FROM log_prestamos WHERE id_usuario_destino={self._ph()} AND estado_recepcion='PENDIENTE' ORDER BY fecha_hora DESC",
             (id_usuario_destino,),
         )
         return [self._enriquecer_prestamo(p) for p in rows]
 
     def get_devoluciones_pendientes_para(self, id_usuario_destino: int) -> list:
         rows = self._fetchall(
-            f"SELECT * FROM prestamos WHERE id_usuario_destino={self._ph()} AND estado_recepcion='RECIBIDO' AND estado_devolucion='PENDIENTE' ORDER BY fecha_hora DESC",
+            f"SELECT * FROM log_prestamos WHERE id_usuario_destino={self._ph()} AND estado_recepcion='RECIBIDO' AND estado_devolucion='PENDIENTE' ORDER BY fecha_hora DESC",
             (id_usuario_destino,),
         )
         return [self._enriquecer_prestamo(p) for p in rows]
 
     def get_meses_prestamos_emitidos(self, id_usuario: int) -> list:
         rows = self._fetchall(
-            f"SELECT fecha_prestamo, fecha_hora FROM prestamos WHERE id_usuario={self._ph()}",
+            f"SELECT fecha_prestamo, fecha_hora FROM log_prestamos WHERE id_usuario={self._ph()}",
             (id_usuario,),
         )
         meses = set()
@@ -1874,28 +2008,22 @@ class KardexDB:
 
     def crear_prestamo(self, datos: dict, id_usuario: int) -> int:
         """
-        Crea un préstamo SIN decrementar stock (el stock se decrementa al ACEPTAR).
-        datos: id_inventario (o id_entrada), id_usuario_destino, cantidad, observacion...
+        Crea un préstamo en estado SOLICITADO. No decrementa stock todavía.
+        datos: id_inventario (o id_entrada), cantidad, observacion...
         """
         ph = self._ph()
         id_inv = datos.get("id_inventario") or datos.get("id_entrada")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return self._insert(
-            f"""INSERT INTO prestamos
+            f"""INSERT INTO log_prestamos
                 (id_inventario, id_usuario, fecha_hora, cantidad,
-                 solicitante, observacion, estado,
-                 id_usuario_destino, firma_presta_path, fecha_prestamo,
-                 fecha_limite, estado_recepcion, estado_devolucion)
-                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},'PENDIENTE',{ph},{ph},{ph},{ph},'PENDIENTE','NO_APLICA')""",
+                 observacion, estado, fecha_prestamo)
+                VALUES ({ph},{ph},{ph},{ph},{ph},'SOLICITADO',{ph})""",
             (
                 id_inv, id_usuario, now,
                 float(datos.get("cantidad", 0)),
-                datos.get("solicitante"),
                 datos.get("observacion"),
-                datos.get("id_usuario_destino"),
-                datos.get("firma_presta_path"),
                 datos.get("fecha_prestamo", now[:10]),
-                datos.get("fecha_limite") or None,
             ),
         )
 
@@ -1910,7 +2038,7 @@ class KardexDB:
         """Acepta o rechaza un préstamo pendiente. Devuelve (bool, mensaje)."""
         ph = self._ph()
         prestamo = self._fetchone(
-            f"SELECT * FROM prestamos WHERE id={ph}", (id_prestamo,)
+            f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,)
         )
         if not prestamo:
             return False, "No se encontró el préstamo."
@@ -1920,14 +2048,7 @@ class KardexDB:
             return False, "El préstamo no corresponde al usuario autenticado."
 
         if aceptar:
-            inv = self._fetchone(
-                f"SELECT cantidad_actual FROM inventario WHERE id={ph}",
-                (prestamo["id_inventario"],),
-            )
-            disponible = float(inv.get("cantidad_actual") or 0) if inv else 0
             cantidad = float(prestamo.get("cantidad", 0))
-            if disponible < cantidad:
-                return False, f"Stock insuficiente. Disponible: {disponible}"
 
             # Crear salida por el préstamo
             id_salida = self.crear_salida(
@@ -1944,7 +2065,7 @@ class KardexDB:
             nuevo_est_dev = "PENDIENTE"
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._execute(
-                f"""UPDATE prestamos SET
+                f"""UPDATE log_prestamos SET
                     estado={ph}, estado_recepcion={ph}, estado_devolucion={ph},
                     fecha_recepcion={ph}, observacion_recepcion={ph},
                     id_usuario_recibe={ph}, id_salida_prestamo={ph}
@@ -1959,7 +2080,7 @@ class KardexDB:
         else:
             nuevo_estado = "RECHAZADO"
             self._execute(
-                f"""UPDATE prestamos SET
+                f"""UPDATE log_prestamos SET
                     estado={ph}, estado_recepcion={ph},
                     id_usuario_recibe={ph}, observacion_recepcion={ph}
                     WHERE id={ph}""",
@@ -1978,7 +2099,7 @@ class KardexDB:
         """Registra la devolución de un préstamo recibido."""
         ph = self._ph()
         prestamo = self._fetchone(
-            f"SELECT * FROM prestamos WHERE id={ph}", (id_prestamo,)
+            f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,)
         )
         if not prestamo:
             return False, "No se encontró el préstamo."
@@ -1991,7 +2112,7 @@ class KardexDB:
 
         cantidad = float(prestamo.get("cantidad", 0))
         inv = self._fetchone(
-            f"SELECT cantidad_actual FROM inventario WHERE id={ph}",
+            f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
             (prestamo["id_inventario"],),
         )
         if inv:
@@ -2000,7 +2121,7 @@ class KardexDB:
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._execute(
-            f"""UPDATE prestamos SET
+            f"""UPDATE log_prestamos SET
                 estado={ph}, estado_devolucion={ph},
                 fecha_devolucion={ph}, observacion_devolucion={ph},
                 id_usuario_devuelve={ph}
@@ -2013,22 +2134,116 @@ class KardexDB:
 
     def _get_tipo_salida_prestamo(self) -> Optional[int]:
         row = self._fetchone(
-            "SELECT id FROM tipo_salida WHERE upper(tipo_salida) IN ('PRESTAMO','PRÉSTAMO')"
+            "SELECT id FROM maestra_tipos_salida WHERE upper(tipo_salida) IN ('PRESTAMO','PRÉSTAMO')"
         )
         return row["id"] if row else None
+
+    def actualizar_prestamo_entrega(
+        self, id_prestamo: int, id_usuario_entregador: int, firma_entregado_por: str
+    ) -> None:
+        """Firma 'Entregado por' → estado=PRESTADO y descuenta stock."""
+        ph = self._ph()
+        prestamo = self._fetchone(f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,))
+        if prestamo and prestamo.get("estado") == "SOLICITADO":
+            cantidad = float(prestamo.get("cantidad", 0))
+            inv = self._fetchone(
+                f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
+                (prestamo["id_inventario"],),
+            )
+            if inv:
+                nueva = max(0.0, float(inv.get("cantidad_actual") or 0) - cantidad)
+                self.actualizar_stock(prestamo["id_inventario"], nueva)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._execute(
+            f"""UPDATE log_prestamos SET
+                estado={ph}, id_usuario_entregador={ph},
+                firma_entregado_por={ph}, fecha_recepcion={ph}
+                WHERE id={ph}""",
+            ("PRESTADO", id_usuario_entregador, firma_entregado_por, now[:10], id_prestamo),
+        )
+        self.commit()
+
+    def actualizar_prestamo_detalle(self, id_prestamo: int, datos: dict) -> None:
+        """Actualiza los campos de detalle de uso (Analista, ensayo, cantidad mg, etc.).
+
+        Los campos firma_analista / id_usuario_analista solo se escriben si vienen
+        con valor, para no borrar una firma ya guardada cuando el usuario solo
+        actualiza campos de texto.
+        """
+        ph = self._ph()
+        sets = [
+            f"fecha_ensayo={ph}",
+            f"no_control_actividad={ph}",
+            f"analisis_realizado={ph}",
+            f"cantidad_mg={ph}",
+            f"observaciones_prestamo={ph}",
+        ]
+        params: list = [
+            datos.get("fecha_ensayo"),
+            datos.get("no_control_actividad"),
+            datos.get("analisis_realizado"),
+            datos.get("cantidad_mg"),
+            datos.get("observaciones_prestamo"),
+        ]
+        # Solo sobrescribir firma/analista si se proporcionan (evitar borrar firma ya guardada)
+        firma = datos.get("firma_analista")
+        id_analista = datos.get("id_usuario_analista")
+        if firma:  # truthy → hay nueva selección interactiva
+            sets.append(f"firma_analista={ph}")
+            sets.append(f"id_usuario_analista={ph}")
+            params.append(firma)
+            params.append(id_analista)
+        params.append(id_prestamo)
+        self._execute(
+            f"UPDATE log_prestamos SET {', '.join(sets)} WHERE id={ph}",
+            tuple(params),
+        )
+        self.commit()
+
+    def completar_devolucion_prestamo(
+        self,
+        id_prestamo: int,
+        fecha_devolucion: str,
+        id_usuario_verificador: int,
+        firma_verificador: str,
+    ) -> None:
+        """Firma 'Verificado el Recibido' → estado=DEVUELTO y reintegra stock."""
+        ph = self._ph()
+        prestamo = self._fetchone(f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,))
+        if prestamo and prestamo.get("estado") == "PRESTADO":
+            cantidad_prestada = float(prestamo.get("cantidad") or 0)
+            cantidad_consumida = float(prestamo.get("cantidad_mg") or 0)
+            # Solo se reintegra lo que no fue consumido en el ensayo;
+            # si no se registró consumo, se devuelve todo.
+            cantidad_devuelta = max(0.0, cantidad_prestada - cantidad_consumida)
+            inv = self._fetchone(
+                f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
+                (prestamo["id_inventario"],),
+            )
+            if inv and cantidad_devuelta > 0:
+                nueva = float(inv.get("cantidad_actual") or 0) + cantidad_devuelta
+                self.actualizar_stock(prestamo["id_inventario"], nueva)
+        self._execute(
+            f"""UPDATE log_prestamos SET
+                estado={ph}, fecha_devolucion={ph},
+                id_usuario_verificador={ph}, firma_verificador={ph}
+                WHERE id={ph}""",
+            ("DEVUELTO", fecha_devolucion, id_usuario_verificador, firma_verificador, id_prestamo),
+        )
+        self.commit()
 
     # ══════════════════════════════════════════════════════════════════════
     # CHECKS CECIF y CLIENTES
     # ══════════════════════════════════════════════════════════════════════
 
     def get_check_cecif(self) -> list:
-        return self._fetchall("SELECT * FROM check_cecif ORDER BY fecha_hora DESC")
+        return self._fetchall("SELECT * FROM log_check_cecif ORDER BY fecha_hora DESC")
 
     def crear_check_cecif(self, datos: dict, id_usuario: int) -> int:
         ph = self._ph()
         ver = datos.get("verificacion", {})
         return self._insert(
-            f"""INSERT INTO check_cecif
+            f"""INSERT INTO log_check_cecif
                 (id_entrada, id_usuario, fecha_hora,
                  fecha_recepcion, id_proveedor, no_orden_compra,
                  id_sustancia, lote, cantidad,
@@ -2084,14 +2299,14 @@ class KardexDB:
         }
 
     def get_check_clientes(self) -> list:
-        return self._fetchall("SELECT * FROM check_clientes ORDER BY fecha_hora DESC")
+        return self._fetchall("SELECT * FROM log_check_clientes ORDER BY fecha_hora DESC")
 
     def crear_check_cliente(self, datos: dict, id_usuario: int) -> int:
         ph = self._ph()
         vn = datos.get("verificacion_nuevas", {})
         vd = datos.get("verificacion_destapadas", {})
         return self._insert(
-            f"""INSERT INTO check_clientes
+            f"""INSERT INTO log_check_clientes
                 (id_entrada, id_usuario, fecha_hora,
                  fecha_recepcion, nombre_cliente, id_sustancia, cantidad,
                  observacion_producto, observaciones,
@@ -2181,7 +2396,7 @@ class KardexDB:
             params.append(filtro_operacion)
         w = ("WHERE " + " AND ".join(where)) if where else ""
         return self._fetchall(
-            f"SELECT * FROM bitacora {w} ORDER BY fecha_hora DESC",
+            f"SELECT * FROM log_bitacora {w} ORDER BY fecha_hora DESC",
             tuple(params),
         )
 
@@ -2196,7 +2411,7 @@ class KardexDB:
     ) -> None:
         ph = self._ph()
         self._execute(
-            f"""INSERT INTO bitacora
+            f"""INSERT INTO log_bitacora
                 (fecha_hora, usuario, tipo_operacion, id_registro,
                  campo, valor_anterior, valor_nuevo)
                 VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",

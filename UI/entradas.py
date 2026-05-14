@@ -390,6 +390,7 @@ class EntradasWindow(MovimientosBase):
             sec3.grid_columnconfigure(c, weight=1)
 
         e_costo_u = make_labeled_entry(sec3, "Costo Unitario", self.v_costo_unitario, 0, 0, width=14)
+        e_costo_u.bind("<FocusOut>", self._format_costo_unitario)
         make_labeled_entry(sec3, "Costo Total (auto)", self.v_costo_total, 0, 1, width=14, read_only=True)
         make_labeled_entry(sec3, "Factura/OC", self.v_factura, 0, 2, width=14)
 
@@ -399,7 +400,8 @@ class EntradasWindow(MovimientosBase):
 
         tk.Checkbutton(sec4, text="Certificado Anl.", variable=self.v_cert_anl, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 10)).grid(row=0, column=0, sticky="w", padx=8, pady=(6, 2))
         tk.Checkbutton(sec4, text="Ficha Seguridad", variable=self.v_ficha_seg, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 10)).grid(row=0, column=1, sticky="w", padx=8, pady=(6, 2))
-        tk.Checkbutton(sec4, text="Factura de compra", variable=self.v_factura_compra, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 10)).grid(row=0, column=2, sticky="w", padx=8, pady=(6, 2))
+        self.cb_factura_compra = tk.Checkbutton(sec4, text="Factura de compra", variable=self.v_factura_compra, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 10), state="disabled")
+        self.cb_factura_compra.grid(row=0, column=2, sticky="w", padx=8, pady=(6, 2))
 
         self.w_fecha_venc = make_date_input(sec4, 1, 0, "Fecha Vencimiento", allow_past=False, empty_default=True)
 
@@ -466,6 +468,7 @@ class EntradasWindow(MovimientosBase):
         self.v_contenido_por_unidad.trace_add("write", lambda *_: self._update_contenido_total())
         self.v_cantidad.trace_add("write", lambda *_: self._update_costo_total())
         self.v_costo_unitario.trace_add("write", lambda *_: self._update_costo_total())
+        self.v_factura.trace_add("write", lambda *_: self._update_factura_compra_state())
 
         e_potencia.bind("<FocusOut>", lambda _: self.v_potencia.set(self.v_potencia.get().upper()))
 
@@ -513,10 +516,32 @@ class EntradasWindow(MovimientosBase):
     def _update_costo_total(self):
         try:
             cant = float(self.v_cantidad.get() or 0)
-            costo_u = float((self.v_costo_unitario.get() or "0").replace(",", "."))
-            self.v_costo_total.set(str(round(cant * costo_u, 4)))
+            costo_u_raw = self.v_costo_unitario.get() or "0"
+            # Remover $ y separador de miles, conservar punto decimal
+            costo_u = float(costo_u_raw.replace("$", "").replace(",", ""))
+            total = cant * costo_u
+            self.v_costo_total.set(f"${total:,.2f}")
         except ValueError:
-            self.v_costo_total.set("0")
+            pass
+
+    def _format_costo_unitario(self, _event=None):
+        """Formatea el costo unitario con símbolo $ y separadores."""
+        try:
+            valor_raw = self.v_costo_unitario.get().replace("$", "").replace(",", "").strip()
+            if not valor_raw:
+                return
+            valor = float(valor_raw)
+            self.v_costo_unitario.set(f"${valor:,.2f}")
+        except ValueError:
+            pass
+
+    def _update_factura_compra_state(self):
+        """Habilita/deshabilita el checkbox 'Factura de compra' si hay contenido en 'Factura/OC'."""
+        if self.v_factura.get().strip():
+            self.cb_factura_compra.configure(state="normal")
+        else:
+            self.cb_factura_compra.configure(state="disabled")
+            self.v_factura_compra.set(False)
 
     def _update_contenido_total(self):
         """Contenido total = cantidad × contenido_por_unidad."""
@@ -804,8 +829,8 @@ class EntradasWindow(MovimientosBase):
                 "total_contenido": cantidad * presentacion,
                 "id_unidad": unidad_id,
                 "potencia": self.v_potencia.get().strip(),
-                "costo_unitario": float((self.v_costo_unitario.get() or "0").replace(",", ".")),
-                "costo_total": float((self.v_costo_total.get() or "0").replace(",", ".")),
+                "costo_unitario": float((self.v_costo_unitario.get() or "0").replace("$", "").replace(",", "")),
+                "costo_total": float((self.v_costo_total.get() or "0").replace("$", "").replace(",", "")),
                 "factura": self.v_factura.get().strip(),
                 "certificado_anl": self.v_cert_anl.get(),
                 "ficha_seguridad": self.v_ficha_seg.get(),
@@ -1000,65 +1025,74 @@ class EntradasWindow(MovimientosBase):
         return int(vals[0])
 
     def _edit_selected(self):
-        id_entrada = self._selected_history_id()
-        if id_entrada is None:
-            messagebox.showwarning("Aviso", "Seleccione una entrada del historial.", parent=self)
-            return
+        try:
+            id_entrada = self._selected_history_id()
+            if id_entrada is None:
+                messagebox.showwarning("Aviso", "Seleccione una entrada del historial.", parent=self)
+                return
 
-        rows = ent.cargar()
-        rec = next((r for r in rows if r.get("id") == id_entrada), None)
-        if rec is None:
-            return
-        if rec.get("estado") == "ANULADA":
-            messagebox.showwarning("Aviso", "No se puede editar una entrada anulada.", parent=self)
-            return
+            rows = ent.cargar()
+            rec = next((r for r in rows if r.get("id") == id_entrada), None)
+            if rec is None:
+                return
+            if rec.get("estado") == "ANULADA":
+                messagebox.showwarning("Aviso", "No se puede editar una entrada anulada.", parent=self)
+                return
 
-        # Cambiar a pestaña de registro para edición visible
-        self.notebook.select(0)
+            # Cambiar a pestaña de registro para edición visible
+            self.notebook.select(0)
 
-        self._editing_id = id_entrada
-        sust = self._sustancias_by_id.get(rec.get("id_sustancia"), {})
-        self.v_codigo.set(str(sust.get("codigo", "")))
-        self._fill_sustancia(self.v_codigo.get())
-        tipo_entrada = self._tipos_entrada_by_id.get(rec.get("id_tipo_entrada"), {}).get("tipo_entrada", "")
-        self.v_tipo_entrada.set(tipo_entrada or rec.get("tipo_entrada", ""))
-        self._set_default_tipo_entrada()
-        self._set_date_widget(self.w_fecha_entrada, rec.get("fecha_entrada", ""))
-        self._set_date_widget(self.w_fecha_venc, rec.get("fecha_vencimiento", ""))
-        self.v_lote.set(rec.get("lote", ""))
-        self.v_catalogo.set(rec.get("catalogo", ""))
-        self.v_cantidad.set(str(rec.get("cantidad", "")))
-        self.v_contenido_por_unidad.set(str(rec.get("presentacion", "")))
-        self.v_contenido_total.set(str(rec.get("total_contenido", "")))
-        self.v_potencia.set(rec.get("potencia", ""))
-        self.v_costo_unitario.set(str(rec.get("costo_unitario", "")))
-        self.v_costo_total.set(str(rec.get("costo_total", "")))
-        self.v_factura.set(rec.get("factura", ""))
+            self._editing_id = id_entrada
+            sust = self._sustancias_by_id.get(rec.get("id_sustancia"), {})
+            codigo = str(sust.get("codigo", ""))
+            if hasattr(self.cb_codigo, "set_by_codigo"):
+                self.cb_codigo.set_by_codigo(codigo)
+            else:
+                self.v_codigo.set(codigo)
+            self._fill_sustancia(codigo)
 
-        uni = self._unidades_by_id.get(rec.get("id_unidad"), {})
-        self.v_unidad.set(uni.get("unidad", ""))
+            tipo_entrada = self._tipos_entrada_by_id.get(rec.get("id_tipo_entrada"), {}).get("tipo_entrada", "")
+            self.v_tipo_entrada.set(tipo_entrada or rec.get("tipo_entrada", ""))
+            self._set_default_tipo_entrada()
+            self._set_date_widget(self.w_fecha_entrada, rec.get("fecha_entrada", ""))
+            self._set_date_widget(self.w_fecha_venc, rec.get("fecha_vencimiento", ""))
+            self.v_lote.set(rec.get("lote", ""))
+            self.v_catalogo.set(rec.get("catalogo", ""))
+            self.v_cantidad.set(str(rec.get("cantidad", "")))
+            self.v_contenido_por_unidad.set(str(rec.get("presentacion", "")))
+            self.v_contenido_total.set(str(rec.get("total_contenido", "")))
+            self.v_potencia.set(rec.get("potencia", ""))
+            self.v_costo_unitario.set(str(rec.get("costo_unitario", "")))
+            self.v_costo_total.set(str(rec.get("costo_total", "")))
+            self.v_factura.set(rec.get("factura", ""))
 
-        ubic = next((u for u in self._ubicaciones_rows if u.get("id") == rec.get("id_ubicacion")), None)
-        if ubic:
-            self.v_ubicacion_tipo.set(str(ubic.get("ubicacion", "")).strip())
-            self._rebuild_cajas_por_ubicacion(self.v_ubicacion_tipo.get())
-            caja_val = str(ubic.get("no_caja", "")).strip()
-            self.v_no_caja.set(caja_val if caja_val else "(SIN CAJA)")
-        for txt, id_ in self._cond_values:
-            if id_ == rec.get("id_condicion_alm"):
-                self.v_condicion.set(txt)
-                break
-        for txt, id_ in self._color_values:
-            if id_ == rec.get("id_color_refuerzo"):
-                self.v_color_refuerzo.set(txt)
-                break
+            uni = self._unidades_by_id.get(rec.get("id_unidad"), {})
+            self.v_unidad.set(uni.get("unidad", ""))
 
-        self.v_cert_anl.set(bool(rec.get("certificado_anl")))
-        self.v_ficha_seg.set(bool(rec.get("ficha_seguridad")))
-        self.v_factura_compra.set(bool(rec.get("factura_compra")))
+            ubic = next((u for u in self._ubicaciones_rows if u.get("id") == rec.get("id_ubicacion")), None)
+            if ubic:
+                self.v_ubicacion_tipo.set(str(ubic.get("ubicacion", "")).strip())
+                self._rebuild_cajas_por_ubicacion(self.v_ubicacion_tipo.get())
+                caja_val = str(ubic.get("no_caja", "")).strip()
+                self.v_no_caja.set(caja_val if caja_val else "(SIN CAJA)")
+            for txt, id_ in self._cond_values:
+                if id_ == rec.get("id_condicion_alm"):
+                    self.v_condicion.set(txt)
+                    break
+            for txt, id_ in self._color_values:
+                if id_ == rec.get("id_color_refuerzo"):
+                    self.v_color_refuerzo.set(txt)
+                    break
 
-        self.txt_obs.delete("1.0", "end")
-        self.txt_obs.insert("1.0", rec.get("observaciones", ""))
+            self.v_cert_anl.set(bool(rec.get("certificado_anl")))
+            self.v_ficha_seg.set(bool(rec.get("ficha_seguridad")))
+            self.v_factura_compra.set(bool(rec.get("factura_compra")))
+
+            self.txt_obs.delete("1.0", "end")
+            self.txt_obs.insert("1.0", rec.get("observaciones", ""))
+        except Exception as e:
+            self._show_status(f"Error al cargar entrada: {e}", is_error=True)
+            messagebox.showerror("Error", f"No se pudo cargar la entrada seleccionada.\n\n{e}", parent=self)
 
     def _cancel_selected(self):
         id_entrada = self._selected_history_id()

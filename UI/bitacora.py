@@ -87,22 +87,20 @@ class BitacoraWindow(tk.Toplevel):
         tbl_frame.grid_rowconfigure(0, weight=1)
         tbl_frame.grid_columnconfigure(0, weight=1)
 
-        cols = ("fecha_hora", "usuario", "operacion", "accion", "id_registro", "campo", "valor_anterior", "valor_nuevo")
+        cols = ("fecha_hora", "usuario", "tipo_operacion", "hoja", "id_registro", "detalle")
         self.tree = SearchableTreeview(
             tbl_frame, columns=cols,
-            search_columns=["usuario", "operacion", "accion", "campo"],
+            search_columns=["usuario", "tipo_operacion", "hoja", "detalle"],
         )
         self.tree.pack(fill="both", expand=True)
 
         for key, title, width in [
-            ("fecha_hora", "Fecha/Hora", 150),
-            ("usuario", "Usuario", 110),
-            ("operacion", "Operacion", 130),
-            ("accion", "Accion", 110),
-            ("id_registro", "ID Registro", 95),
-            ("campo", "Campo", 160),
-            ("valor_anterior", "Valor Anterior", 250),
-            ("valor_nuevo", "Valor Nuevo", 250),
+            ("fecha_hora", "Fecha y Hora", 145),
+            ("usuario", "Usuario", 100),
+            ("tipo_operacion", "Tipo Operacion", 110),
+            ("hoja", "Hoja", 90),
+            ("id_registro", "ID Registro", 80),
+            ("detalle", "Detalle del Cambio", 560),
         ]:
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, anchor="center")
@@ -187,18 +185,57 @@ class BitacoraWindow(tk.Toplevel):
         start = (self._current_page - 1) * self._page_size
         page_rows = self._all_rows[start:start + self._page_size]
         for r in page_rows:
-            operacion, accion = self._split_tipo_operacion(r.get("tipo_operacion", ""))
+            hoja, accion = self._split_tipo_operacion(r.get("tipo_operacion", ""))
             self.tree.insert("", "end", values=(
                 r.get("fecha_hora", ""),
                 r.get("usuario", ""),
-                operacion,
                 accion,
+                hoja,
                 r.get("id_registro", ""),
-                r.get("campo", ""),
-                r.get("valor_anterior", ""),
-                r.get("valor_nuevo", ""),
+                self._build_detalle(r),
             ))
         self._update_pagination_buttons()
+
+    @staticmethod
+    def _build_detalle(row):
+        campo = str(row.get("campo", "") or "").strip()
+        anterior = str(row.get("valor_anterior", "") or "").strip()
+        nuevo = str(row.get("valor_nuevo", "") or "").strip()
+        tipo_op = str(row.get("tipo_operacion", "") or "").strip().upper()
+
+        accion = "operacion"
+        if "-" in tipo_op:
+            _mod, _acc = tipo_op.split("-", 1)
+            accion = _acc.lower()
+        elif tipo_op:
+            accion = tipo_op.lower()
+
+        if campo in {"DETALLE", "REGISTRO"}:
+            if nuevo:
+                return (
+                    f"Se registro la accion de {accion} con el siguiente detalle: {nuevo}"
+                )
+            if anterior:
+                return (
+                    f"Se registro la accion de {accion} con el siguiente detalle: {anterior}"
+                )
+            return f"Se registro la accion de {accion}, pero no se encontraron datos adicionales del cambio."
+
+        if anterior and nuevo:
+            return (
+                f"En la accion de {accion}, el campo '{campo}' fue modificado. "
+                f"Valor anterior: '{anterior}'. Valor nuevo: '{nuevo}'."
+            )
+        if nuevo:
+            return (
+                f"En la accion de {accion}, se establecio el campo '{campo}' "
+                f"con el valor: '{nuevo}'."
+            )
+        if anterior:
+            return (
+                f"En la accion de {accion}, el campo '{campo}' conserva el valor previo: '{anterior}'."
+            )
+        return f"Se registro la accion de {accion}, pero el sistema no reporto cambios especificos en los campos auditados."
 
     def _prev_page(self):
         if self._current_page > 1:

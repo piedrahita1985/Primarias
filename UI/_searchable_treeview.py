@@ -113,8 +113,11 @@ class SearchableTreeview(tk.Frame):
     def selection(self):
         return self.tree.selection()
 
-    def item(self, item, **kwargs):
-        return self.tree.item(item, **kwargs)
+    def item(self, item, option=None, **kwargs):
+        # Keep compatibility with ttk.Treeview.item(iid, "values") style calls.
+        if option is None:
+            return self.tree.item(item, **kwargs)
+        return self.tree.item(item, option, **kwargs)
 
     def set(self, item, column=None, value=None):
         return self.tree.set(item, column, value)
