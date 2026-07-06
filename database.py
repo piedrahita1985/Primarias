@@ -2042,20 +2042,36 @@ class KardexDB:
         )
         if not prestamo:
             return False, "No se encontró el préstamo."
-        if prestamo.get("estado") != "PENDIENTE":
+        estado_actual = str(prestamo.get("estado", "")).upper()
+        if estado_actual not in {"PENDIENTE", "SOLICITADO"}:
             return False, "Este préstamo ya fue respondido."
         if int(prestamo.get("id_usuario_destino") or 0) != int(id_usuario_recibe or 0):
             return False, "El préstamo no corresponde al usuario autenticado."
 
         if aceptar:
-            cantidad = float(prestamo.get("cantidad", 0))
+            cantidad_contenido = float(prestamo.get("cantidad", 0) or 0)
+            inv = self._fetchone(
+                f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
+                (prestamo["id_inventario"],),
+            )
+            if not inv:
+                return False, "No se encontró el inventario asociado al préstamo."
+            presentacion = float(inv.get("presentacion") or 1)
+            if presentacion <= 0:
+                presentacion = 1.0
+            cantidad_envases = cantidad_contenido / presentacion
+            disponible_envases = float(inv.get("cantidad_actual") or 0)
+            if cantidad_envases <= 0:
+                return False, "La cantidad del préstamo debe ser mayor a cero."
+            if cantidad_envases > disponible_envases:
+                return False, "Stock insuficiente para aceptar el préstamo."
 
             # Crear salida por el préstamo
             id_salida = self.crear_salida(
                 {
                     "id_inventario": prestamo["id_inventario"],
                     "id_tipo_salida": self._get_tipo_salida_prestamo(),
-                    "cantidad": cantidad,
+                    "cantidad": cantidad_envases,
                     "actividad": f"PRESTAMO A USUARIO ID {id_usuario_recibe}",
                     "observacion": observacion_recibo,
                 },
@@ -2110,13 +2126,17 @@ class KardexDB:
         if prestamo.get("estado_devolucion") == "DEVUELTO":
             return False, "Este préstamo ya fue devuelto."
 
-        cantidad = float(prestamo.get("cantidad", 0))
+        cantidad_contenido = float(prestamo.get("cantidad", 0) or 0)
         inv = self._fetchone(
-            f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
+            f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
             (prestamo["id_inventario"],),
         )
         if inv:
-            nueva = (inv["cantidad_actual"] or 0) + cantidad
+            presentacion = float(inv.get("presentacion") or 1)
+            if presentacion <= 0:
+                presentacion = 1.0
+            cantidad_envases = cantidad_contenido / presentacion
+            nueva = float(inv.get("cantidad_actual") or 0) + cantidad_envases
             self.actualizar_stock(prestamo["id_inventario"], nueva)
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2145,14 +2165,27 @@ class KardexDB:
         ph = self._ph()
         prestamo = self._fetchone(f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,))
         if prestamo and prestamo.get("estado") == "SOLICITADO":
-            cantidad = float(prestamo.get("cantidad", 0))
+            cantidad_contenido = float(prestamo.get("cantidad", 0) or 0)
             inv = self._fetchone(
-                f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
+                f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
                 (prestamo["id_inventario"],),
             )
-            if inv:
-                nueva = max(0.0, float(inv.get("cantidad_actual") or 0) - cantidad)
-                self.actualizar_stock(prestamo["id_inventario"], nueva)
+            if not inv:
+                raise ValueError("No se encontró el inventario asociado al préstamo.")
+            presentacion = float(inv.get("presentacion") or 1)
+            if presentacion <= 0:
+                presentacion = 1.0
+            cantidad_envases = cantidad_contenido / presentacion
+            disponible_envases = float(inv.get("cantidad_actual") or 0)
+            if cantidad_envases <= 0:
+                raise ValueError("La cantidad del préstamo debe ser mayor a cero.")
+            if cantidad_envases > disponible_envases:
+                raise ValueError(
+                    "Stock insuficiente para entregar el préstamo. "
+                    f"Disponible: {round(disponible_envases * presentacion, 4)}"
+                )
+            nueva = disponible_envases - cantidad_envases
+            self.actualizar_stock(prestamo["id_inventario"], nueva)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._execute(
             f"""UPDATE log_prestamos SET
@@ -2212,16 +2245,20 @@ class KardexDB:
         prestamo = self._fetchone(f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,))
         if prestamo and prestamo.get("estado") == "PRESTADO":
             cantidad_prestada = float(prestamo.get("cantidad") or 0)
-            cantidad_consumida = float(prestamo.get("cantidad_mg") or 0)
+            cantidad_consumida = max(0.0, float(prestamo.get("cantidad_mg") or 0))
             # Solo se reintegra lo que no fue consumido en el ensayo;
             # si no se registró consumo, se devuelve todo.
             cantidad_devuelta = max(0.0, cantidad_prestada - cantidad_consumida)
             inv = self._fetchone(
-                f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
+                f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
                 (prestamo["id_inventario"],),
             )
             if inv and cantidad_devuelta > 0:
-                nueva = float(inv.get("cantidad_actual") or 0) + cantidad_devuelta
+                presentacion = float(inv.get("presentacion") or 1)
+                if presentacion <= 0:
+                    presentacion = 1.0
+                cantidad_envases_devueltos = cantidad_devuelta / presentacion
+                nueva = float(inv.get("cantidad_actual") or 0) + cantidad_envases_devueltos
                 self.actualizar_stock(prestamo["id_inventario"], nueva)
         self._execute(
             f"""UPDATE log_prestamos SET

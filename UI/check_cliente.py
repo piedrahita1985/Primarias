@@ -391,6 +391,7 @@ class CheckClienteWindow(tk.Toplevel):
             "fecha_entrada": fecha,
             "cert_anl": verificacion_nuevas.get("certificado_calidad") == "Si",
             "ficha_seg": verificacion_nuevas.get("ficha_seguridad") == "Si",
+            "lote_opcional": True,
         }
 
         chk.guardar_cliente_nuevo(self._clientes_items, datos)

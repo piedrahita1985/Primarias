@@ -311,6 +311,8 @@ class MenuApp(tk.Toplevel):
 			("Inventario", "Stock", "log_inventario", lambda: self._open_master_module("UI.inventario", "inventario")),
 			("Bitacora", "Auditoria", "log_bitacora", lambda: self._open_master_module("UI.bitacora", "bitacora")),
 			("Prestamos", "Gestión de préstamos", "log_prestamos", lambda: self._open_master_module("UI.prestamos", "prestamos")),
+			("Stock Analista", "Reporte de stock detallado", "", lambda: self._open_master_module("UI.stock_analista", "stock analista")),
+			("Hist. Checklist", "Historial de listas de chequeo", "", lambda: self._open_master_module("UI.hist_checklist", "hist checklist")),
 		]
 
 		for index, (title, subtitle, perm_key, command) in enumerate(actions):

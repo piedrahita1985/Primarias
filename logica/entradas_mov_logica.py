@@ -55,19 +55,27 @@ def agregar(record, usuario="SISTEMA"):
         data_inventario = {**record, "cantidad": 0}
         nuevo_id = db.crear_inventario(data_inventario)
 
-        tipo_entrada_id = record.get("id_tipo_entrada")
-        if tipo_entrada_id is not None:
-            id_usuario = _resolver_id_usuario(db, usuario)
-            db.crear_entrada(
-                {
-                    "id_inventario": nuevo_id,
-                    "id_tipo_entrada": tipo_entrada_id,
-                    "cantidad": cantidad_ingreso,
-                    "observacion": record.get("observaciones"),
-                    "certificado": int(bool(record.get("certificado_anl", False))),
-                },
-                id_usuario=id_usuario,
-            )
+        try:
+            tipo_entrada_id = record.get("id_tipo_entrada")
+            if tipo_entrada_id is not None:
+                id_usuario = _resolver_id_usuario(db, usuario)
+                db.crear_entrada(
+                    {
+                        "id_inventario": nuevo_id,
+                        "id_tipo_entrada": tipo_entrada_id,
+                        "cantidad": cantidad_ingreso,
+                        "observacion": record.get("observaciones"),
+                        "certificado": int(bool(record.get("certificado_anl", False))),
+                    },
+                    id_usuario=id_usuario,
+                )
+        except Exception:
+            # Evita dejar inventario activo sin movimiento de entrada asociado.
+            try:
+                db.anular_inventario(nuevo_id)
+            except Exception:
+                pass
+            raise
 
         bit.registrar_campos(
             tipo_operacion="ENTRADAS-CREAR",

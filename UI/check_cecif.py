@@ -501,9 +501,9 @@ class CheckCECIFWindow(tk.Toplevel):
             messagebox.showwarning("Aviso", "Seleccione un Código de Producto válido.", parent=self)
             return
 
-        if not self.v_lote.get().strip():
-            messagebox.showwarning("Aviso", "Ingrese el número de Lote.", parent=self)
-            return
+        #if not self.v_lote.get().strip():
+            #messagebox.showwarning("Aviso", "Ingrese el número de Lote.", parent=self)
+            #return
 
         if not self.v_cantidad.get().strip():
             messagebox.showwarning("Aviso", "Ingrese la Cantidad.", parent=self)

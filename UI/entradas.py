@@ -87,6 +87,7 @@ class EntradasWindow(MovimientosBase):
     def __init__(self, master, prefill=None):
         super().__init__(master, "Sistema de Gestion - Entradas")
         self._prefill = prefill
+        self._lote_opcional = bool((prefill or {}).get("lote_opcional", False))
         apply_default_window(self, min_width=1100, min_height=700)
 
         self._maestras = common.cargar_maestras()
@@ -449,6 +450,34 @@ class EntradasWindow(MovimientosBase):
         self.cb_cond = ttk.Combobox(sec5, textvariable=self.v_condicion, values=[x[0] for x in self._cond_values], state="readonly", font=("Segoe UI", 10))
         self.cb_cond.grid(row=1, column=2, sticky="ew", padx=8, pady=(0, 8))
 
+        def _cond_enter(e):
+            text = self.v_condicion.get().strip()
+            if not text or len(text) < 20:
+                return
+            try:
+                self._tooltip = tk.Toplevel(self.cb_cond)
+                self._tooltip.wm_overrideredirect(True)
+                self._tooltip.attributes("-topmost", True)
+                self._tooltip.geometry(f"+{e.x_root + 10}+{e.y_root + 16}")
+                tk.Label(
+                    self._tooltip, text=text, justify="left",
+                    bg="#FFFFE0", fg="#202020", relief="solid", bd=1,
+                    padx=6, pady=4, wraplength=520, font=("Segoe UI", 9),
+                ).pack()
+            except Exception:
+                pass
+
+        def _cond_leave(_e):
+            try:
+                if self._tooltip and self._tooltip.winfo_exists():
+                    self._tooltip.destroy()
+                    self._tooltip = None
+            except Exception:
+                pass
+
+        self.cb_cond.bind("<Enter>", _cond_enter)
+        self.cb_cond.bind("<Leave>", _cond_leave)
+
         tk.Label(sec5, text="Color Refuerzo", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=3, sticky="w", padx=8, pady=(6, 2))
         self._color_values = []
         for c in self._maestras["colores"]:
@@ -749,7 +778,15 @@ class EntradasWindow(MovimientosBase):
                 self._warn("Seleccione un codigo de uso valido.")
                 return
 
-            if not self.v_lote.get().strip() or not self.v_catalogo.get().strip() or not self.v_cantidad.get().strip():
+            lote = self.v_lote.get().strip()
+            catalogo = self.v_catalogo.get().strip()
+            cantidad_txt = self.v_cantidad.get().strip()
+
+            if not catalogo or not cantidad_txt:
+                self._warn("Catalogo y cantidad son obligatorios.")
+                return
+
+            if not self._lote_opcional and not lote:
                 self._warn("Lote, catalogo y cantidad son obligatorios.")
                 return
 
@@ -822,7 +859,7 @@ class EntradasWindow(MovimientosBase):
                 "id_tipo_entrada": tipo_entrada_id,
                 "id_sustancia": sustancia.get("id"),
                 "id_fabricante": fabricante.get("id") if fabricante else None,
-                "lote": self.v_lote.get().strip(),
+                "lote": lote,
                 "catalogo": self.v_catalogo.get().strip(),
                 "cantidad": cantidad,
                 "presentacion": presentacion,           # clave de BD sin cambios

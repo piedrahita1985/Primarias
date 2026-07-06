@@ -133,6 +133,19 @@ def actualizar_detalle(id_prestamo, datos, usuario_accion="SISTEMA"):
     """Guarda campos de uso: fecha_ensayo, análisis, cantidad_mg, firma_analista."""
     db = get_db()
     try:
+        prestamo = next((p for p in db.get_prestamos() if p.get("id") == id_prestamo), None)
+        if prestamo is None:
+            return False, "Préstamo no encontrado."
+
+        cantidad_prestada = common.to_float(prestamo.get("cantidad"))
+        cantidad_consumida = datos.get("cantidad_mg")
+        if cantidad_consumida is not None:
+            cantidad_consumida = common.to_float(cantidad_consumida)
+            if cantidad_consumida < 0:
+                return False, "La cantidad consumida no puede ser negativa."
+            if cantidad_consumida > cantidad_prestada:
+                return False, "La cantidad consumida no puede superar la cantidad prestada."
+
         db.actualizar_prestamo_detalle(id_prestamo, datos)
         bit.registrar_campos(
             tipo_operacion="PRESTAMO-DETALLE",
@@ -168,5 +181,95 @@ def completar_devolucion(id_prestamo, fecha_devolucion, id_usuario_verificador,
             cambios=[{"campo": "estado", "valor_anterior": "PRESTADO", "valor_nuevo": "DEVUELTO"}],
         )
         return True, "Devolución registrada correctamente."
+    finally:
+        db.close()
+
+
+def recibidos_pendientes_para_usuario(id_usuario, maestras):
+    """Filas pendientes por recibir para el usuario destino."""
+    db = get_db()
+    try:
+        rows = db.get_recibidos_pendientes_para(int(id_usuario or 0))
+    finally:
+        db.close()
+    usuarios_by_id = common.map_by_id(usuarios_habilitados())
+    return _enriquecer(rows, maestras, usuarios_by_id)
+
+
+def devoluciones_pendientes_para_usuario(id_usuario, maestras):
+    """Filas recibidas y pendientes de devolución para el usuario destino."""
+    db = get_db()
+    try:
+        rows = db.get_devoluciones_pendientes_para(int(id_usuario or 0))
+    finally:
+        db.close()
+    usuarios_by_id = common.map_by_id(usuarios_habilitados())
+    return _enriquecer(rows, maestras, usuarios_by_id)
+
+
+def responder_prestamo(
+    id_prestamo,
+    id_usuario_recibe,
+    aceptar,
+    observacion_recibo="",
+    usuario_accion="SISTEMA",
+):
+    """Compatibilidad con UI/recibidos para aceptar/rechazar recepción."""
+    db = get_db()
+    try:
+        ok, msg = db.responder_prestamo(
+            id_prestamo=int(id_prestamo or 0),
+            id_usuario_recibe=int(id_usuario_recibe or 0),
+            aceptar=bool(aceptar),
+            observacion_recibo=observacion_recibo,
+            id_usuario_accion=int(id_usuario_recibe or 0),
+        )
+        if ok:
+            bit.registrar_campos(
+                tipo_operacion="PRESTAMO-RESPUESTA",
+                id_registro=int(id_prestamo or 0),
+                usuario=usuario_accion,
+                cambios=[
+                    {
+                        "campo": "recepcion",
+                        "valor_anterior": "PENDIENTE",
+                        "valor_nuevo": "RECIBIDO" if aceptar else "RECHAZADO",
+                    }
+                ],
+            )
+        return ok, msg
+    finally:
+        db.close()
+
+
+def devolver_prestamo(
+    id_prestamo,
+    id_usuario_devuelve,
+    observacion_devolucion="",
+    usuario_accion="SISTEMA",
+):
+    """Compatibilidad con UI/recibidos para cierre de devolución."""
+    db = get_db()
+    try:
+        ok, msg = db.devolver_prestamo(
+            id_prestamo=int(id_prestamo or 0),
+            id_usuario_devuelve=int(id_usuario_devuelve or 0),
+            observacion_devolucion=observacion_devolucion,
+            id_usuario_accion=int(id_usuario_devuelve or 0),
+        )
+        if ok:
+            bit.registrar_campos(
+                tipo_operacion="PRESTAMO-DEVOLUCION-RECIBIDOS",
+                id_registro=int(id_prestamo or 0),
+                usuario=usuario_accion,
+                cambios=[
+                    {
+                        "campo": "devolucion",
+                        "valor_anterior": "PENDIENTE",
+                        "valor_nuevo": "DEVUELTO",
+                    }
+                ],
+            )
+        return ok, msg
     finally:
         db.close()
