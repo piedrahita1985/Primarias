@@ -256,7 +256,7 @@ class InventarioWindow(tk.Toplevel):
             self._tooltip = None
 
     def _schedule_refresh(self):
-        self._refresh_job = self.after(3000, self._refresh_tick)
+        self._refresh_job = self.after(10000, self._refresh_tick)
 
     def _refresh_tick(self):
         self._refresh_job = None

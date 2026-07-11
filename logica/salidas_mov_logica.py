@@ -24,22 +24,15 @@ def cargar():
 
 def _resolver_id_usuario(db, usuario: str) -> int:
     usuario_txt = str(usuario or "").strip()
+    usuarios = db.get_usuarios()
     if usuario_txt:
-        usuarios = db.get_usuarios()
         exacto = next((u for u in usuarios if str(u.get("usuario", "")).strip() == usuario_txt), None)
         if exacto:
             return exacto["id"]
         por_nombre = next((u for u in usuarios if str(u.get("nombre", "")).strip() == usuario_txt), None)
         if por_nombre:
             return por_nombre["id"]
-
-    usuarios = db.get_usuarios()
-    habilitado = next((u for u in usuarios if str(u.get("estado", "HABILITADA")) == "HABILITADA"), None)
-    if habilitado:
-        return habilitado["id"]
-    if usuarios:
-        return usuarios[0]["id"]
-    raise ValueError("No hay usuarios registrados para asociar el movimiento de salida.")
+    raise ValueError("No se pudo resolver el usuario de la salida. Inicie sesión de nuevo.")
 
 
 def agregar(record, usuario="SISTEMA"):

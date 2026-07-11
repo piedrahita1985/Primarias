@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 from app_paths import resource_path
 from config.config import COLORS, PROJECT_NAME, WINDOW_HEIGHT, WINDOW_WIDTH
 from logica import usuarios_logica as usr
+from database import get_db
 from UI._mov_utils import apply_default_window
 
 IMAGE_PATH = resource_path("imagenes", "imagenlogin.jpg")
@@ -205,17 +206,11 @@ class LoginApp(tk.Tk):
 			messagebox.showwarning("Campos vacios", "Ingrese usuario y contrasena.")
 			return
 
-		users = cargar_usuarios()
-		valid_user = next(
-			(
-				user
-				for user in users
-				if (user.get("usuario") or user.get("nombre")) == username
-				and (user.get("contrasena") or user.get("contraseña")) == password
-				and user.get("estado", "HABILITADA") == "HABILITADA"
-			),
-			None,
-		)
+		db = get_db()
+		try:
+			valid_user = db.get_usuario_login(username, password)
+		finally:
+			db.close()
 
 		if not valid_user:
 			messagebox.showerror("Acceso denegado", "Usuario o contrasena incorrectos.")

@@ -857,6 +857,7 @@ class EntradasWindow(MovimientosBase):
             record = {
                 "fecha_entrada": get_date_value(self.w_fecha_entrada),
                 "id_tipo_entrada": tipo_entrada_id,
+                "id_usuario": self.id_usuario,
                 "id_sustancia": sustancia.get("id"),
                 "id_fabricante": fabricante.get("id") if fabricante else None,
                 "lote": lote,

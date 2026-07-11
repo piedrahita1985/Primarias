@@ -77,3 +77,41 @@ def filtrar(desde="", hasta="", usuario="", tipo_operacion="", id_registro=""):
 
     out.sort(key=lambda x: x.get("id", 0), reverse=True)
     return out
+
+
+def contar_filtrado(desde="", hasta="", usuario="", tipo_operacion="", id_registro="") -> int:
+    db = get_db()
+    try:
+        return db.contar_bitacora_filtrada(
+            desde=desde,
+            hasta=hasta,
+            usuario=usuario,
+            tipo_operacion=tipo_operacion,
+            id_registro=id_registro,
+        )
+    finally:
+        db.close()
+
+
+def filtrar_paginado(
+    desde="",
+    hasta="",
+    usuario="",
+    tipo_operacion="",
+    id_registro="",
+    limit=25,
+    offset=0,
+):
+    db = get_db()
+    try:
+        return db.get_bitacora_paginada(
+            desde=desde,
+            hasta=hasta,
+            usuario=usuario,
+            tipo_operacion=tipo_operacion,
+            id_registro=id_registro,
+            limit=limit,
+            offset=offset,
+        )
+    finally:
+        db.close()

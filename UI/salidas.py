@@ -355,6 +355,7 @@ class SalidasWindow(MovimientosBase):
             record = {
                 "fecha_salida": get_date_value(self.w_fecha),
                 "id_tipo_salida": tipo_salida_id,
+                "id_usuario": self.id_usuario,
                 "id_sustancia": self._current_sustancia.get("id"),
                 "id_entrada": lote_sel.get("id_entrada"),
                 "id_unidad": lote_sel.get("id_unidad"),

@@ -33,8 +33,15 @@ class BitacoraWindow(tk.Toplevel):
         self._desde_habilitada = False
         self._hasta_habilitada = False
 
-        # Pagination state
-        self._all_rows = []
+        # Pagination state (server-side)
+        self._filters = {
+            "desde": "",
+            "hasta": "",
+            "usuario": "",
+            "tipo_operacion": "",
+            "id_registro": "",
+        }
+        self._current_rows = []
         self._current_page = 1
         self._page_size = 25
         self._total_pages = 1
@@ -170,30 +177,34 @@ class BitacoraWindow(tk.Toplevel):
     # Pagination
     # ------------------------------------------------------------------
     def _load_default(self):
-        self._all_rows = bit.filtrar(desde="", hasta="", usuario="", tipo_operacion="", id_registro="")
+        self._filters = {"desde": "", "hasta": "", "usuario": "", "tipo_operacion": "", "id_registro": ""}
         self._current_page = 1
-        self._total_records = len(self._all_rows)
+        self._total_records = bit.contar_filtrado(**self._filters)
         self._total_pages = max(1, -(-self._total_records // self._page_size))
         self._render_page()
 
     def _apply_filters(self):
-        self._all_rows = bit.filtrar(
-            desde=get_date_value(self.w_desde) if self._desde_habilitada else "",
-            hasta=get_date_value(self.w_hasta) if self._hasta_habilitada else "",
-            usuario=self.v_usuario.get().strip(),
-            tipo_operacion=self.v_tipo_operacion.get().strip(),
-            id_registro=self.v_id_registro.get().strip(),
-        )
+        self._filters = {
+            "desde": get_date_value(self.w_desde) if self._desde_habilitada else "",
+            "hasta": get_date_value(self.w_hasta) if self._hasta_habilitada else "",
+            "usuario": self.v_usuario.get().strip(),
+            "tipo_operacion": self.v_tipo_operacion.get().strip(),
+            "id_registro": self.v_id_registro.get().strip(),
+        }
         self._current_page = 1
-        self._total_records = len(self._all_rows)
+        self._total_records = bit.contar_filtrado(**self._filters)
         self._total_pages = max(1, -(-self._total_records // self._page_size))
         self._render_page()
 
     def _render_page(self):
         self.tree.clear()
         start = (self._current_page - 1) * self._page_size
-        page_rows = self._all_rows[start:start + self._page_size]
-        for r in page_rows:
+        self._current_rows = bit.filtrar_paginado(
+            **self._filters,
+            limit=self._page_size,
+            offset=start,
+        )
+        for r in self._current_rows:
             hoja, accion = self._split_tipo_operacion(r.get("tipo_operacion", ""))
             self.tree.insert("", "end", values=(
                 r.get("fecha_hora", ""),
@@ -295,7 +306,7 @@ class BitacoraWindow(tk.Toplevel):
             )
             return
 
-        rows = self._all_rows
+        rows = bit.filtrar_paginado(**self._filters, limit=max(1, self._total_records), offset=0)
         if not rows:
             messagebox.showwarning("Sin datos", "No hay registros para exportar.", parent=self)
             return

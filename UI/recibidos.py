@@ -10,12 +10,12 @@ from UI._mov_utils import attach_treeview_sorting, apply_default_window, draw_ti
 FILTROS = ["Todos", "Pendientes por recibir", "Pendientes devolver"]
 
 
-def open_window(master):
-    RecibidosWindow(master)
+def open_window(master, current_user=None):
+    RecibidosWindow(master, current_user=current_user)
 
 
 class RecibidosWindow(tk.Toplevel):
-    def __init__(self, master):
+    def __init__(self, master, current_user=None):
         super().__init__(master)
         self.title("Sistema de Gestion - Recibidos")
         self.configure(bg=COLORS["secondary"])
@@ -23,14 +23,16 @@ class RecibidosWindow(tk.Toplevel):
 
         self._maestras = common.cargar_maestras()
         self._users = prest.usuarios_habilitados()
-        self._user = self._resolve_current_user(master)
+        self._user = self._resolve_current_user(master, current_user)
         self.v_filtro = tk.StringVar(value="Todos")
         self._row_meta = {}
 
         self._build_ui()
         self._refresh_all()
 
-    def _resolve_current_user(self, master):
+    def _resolve_current_user(self, master, current_user=None):
+        if isinstance(current_user, dict) and current_user.get("id"):
+            return current_user
         user = getattr(master, "user_record", None)
         if isinstance(user, dict) and user.get("id"):
             return user

@@ -24,23 +24,15 @@ def cargar():
 
 def _resolver_id_usuario(db, usuario: str) -> int:
     usuario_txt = str(usuario or "").strip()
+    usuarios = db.get_usuarios()
     if usuario_txt:
-        usuarios = db.get_usuarios()
         exacto = next((u for u in usuarios if str(u.get("usuario", "")).strip() == usuario_txt), None)
         if exacto:
             return exacto["id"]
         por_nombre = next((u for u in usuarios if str(u.get("nombre", "")).strip() == usuario_txt), None)
         if por_nombre:
             return por_nombre["id"]
-
-    # Fallback: primer usuario habilitado o el primero disponible.
-    usuarios = db.get_usuarios()
-    habilitado = next((u for u in usuarios if str(u.get("estado", "HABILITADA")) == "HABILITADA"), None)
-    if habilitado:
-        return habilitado["id"]
-    if usuarios:
-        return usuarios[0]["id"]
-    raise ValueError("No hay usuarios registrados para asociar el movimiento de entrada.")
+    raise ValueError("No se pudo resolver el usuario de la entrada. Inicie sesión de nuevo.")
 
 
 def agregar(record, usuario="SISTEMA"):
@@ -58,7 +50,9 @@ def agregar(record, usuario="SISTEMA"):
         try:
             tipo_entrada_id = record.get("id_tipo_entrada")
             if tipo_entrada_id is not None:
-                id_usuario = _resolver_id_usuario(db, usuario)
+                id_usuario = record.pop("id_usuario", None)
+                if not id_usuario:
+                    id_usuario = _resolver_id_usuario(db, usuario)
                 db.crear_entrada(
                     {
                         "id_inventario": nuevo_id,

@@ -368,7 +368,10 @@ class MenuApp(tk.Toplevel):
 		try:
 			module = importlib.import_module(module_name)
 			if hasattr(module, "open_window"):
-				module.open_window(self)
+				try:
+					module.open_window(self, current_user=self.user_record)
+				except TypeError:
+					module.open_window(self)
 				return
 			messagebox.showinfo("Modulo", f"Archivo {title}.py encontrado, aun sin implementacion.")
 		except Exception as exc:

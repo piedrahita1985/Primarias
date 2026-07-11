@@ -259,7 +259,7 @@ class UsuariosWindow(MaestraBase):
     def _set_form_data(self, r: dict):
         self._v_usuario.set(r.get("usuario", ""))
         self._v_nombre.set(r.get("nombre", ""))
-        self._v_contrasena.set(r.get("contrasena", ""))
+        self._v_contrasena.set("")
         self._v_rol.set(r.get("rol", ""))
         permisos = r.get("permisos", {})
         for k, v in self._perm_vars.items():
@@ -289,7 +289,7 @@ class UsuariosWindow(MaestraBase):
             return False, "El usuario es obligatorio."
         if not datos.get("nombre"):
             return False, "El nombre completo es obligatorio."
-        if not datos.get("contrasena"):
+        if self._modo == "nuevo" and not datos.get("contrasena"):
             return False, "La contrasena es obligatoria."
         if not datos.get("rol"):
             return False, "Debe seleccionar un rol."

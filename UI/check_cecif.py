@@ -115,6 +115,12 @@ class FirmaSelector(tk.Frame):
         self._clear_firma()
         resolved_path = self._resolve_firma_path(path)
         if not resolved_path:
+            if str(path or "").strip():
+                messagebox.showwarning(
+                    "Firma",
+                    "No se encontró el archivo de firma del usuario seleccionado.",
+                    parent=self.winfo_toplevel(),
+                )
             self.lbl_firma.configure(image="", text="Sin firma registrada",
                                      fg=COLORS["text_muted"], font=("Segoe UI", 9, "italic"),
                                      width=0, height=0)

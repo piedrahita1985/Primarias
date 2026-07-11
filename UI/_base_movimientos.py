@@ -18,6 +18,8 @@ class MovimientosBase(tk.Toplevel):
         self.configure(bg=COLORS["secondary"])
 
         self.username = getattr(master, "username", "SISTEMA")
+        self.user_record = getattr(master, "user_record", {}) or {}
+        self.id_usuario = int(self.user_record.get("id") or 0)
 
         # Estado de paginación
         self._current_page = 1

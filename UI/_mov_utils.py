@@ -160,23 +160,37 @@ def _add_placeholder_to_dateentry(widget, placeholder):
     try:
         entry = widget.entry
         original_fg = entry.cget("fg")
+        widget._placeholder_text = placeholder  # type: ignore[attr-defined]
+        widget._placeholder_active = False      # type: ignore[attr-defined]
 
-        def on_focus_in(e):
-            if entry.get() == placeholder:
-                entry.delete(0, "end")
-                entry.configure(fg=original_fg)
-
-        def on_focus_out(e):
-            if not entry.get():
-                entry.insert(0, placeholder)
-                entry.configure(fg=COLORS["text_muted"])
-
-        if not entry.get():
+        def set_placeholder():
+            entry.delete(0, "end")
             entry.insert(0, placeholder)
             entry.configure(fg=COLORS["text_muted"])
+            widget._placeholder_active = True  # type: ignore[attr-defined]
+
+        def clear_placeholder():
+            if getattr(widget, "_placeholder_active", False):
+                entry.delete(0, "end")
+                entry.configure(fg=original_fg)
+                widget._placeholder_active = False  # type: ignore[attr-defined]
+
+        def on_focus_in(e):
+            clear_placeholder()
+
+        def on_focus_out(e):
+            if not entry.get().strip():
+                set_placeholder()
+
+        def on_date_selected(_e):
+            clear_placeholder()
+
+        if not entry.get().strip():
+            set_placeholder()
 
         entry.bind("<FocusIn>", on_focus_in)
         entry.bind("<FocusOut>", on_focus_out)
+        widget.bind("<<DateEntrySelected>>", on_date_selected)
     except Exception:
         pass
 
@@ -238,7 +252,11 @@ def make_date_input(parent, row, col, label="Fecha", allow_past=True, empty_defa
 
 def get_date_value(widget):
     if DateEntry is not None and isinstance(widget, DateEntry):
+        if getattr(widget, "_placeholder_active", False):
+            return ""
         txt = widget.get().strip()
+        if txt == getattr(widget, "_placeholder_text", ""):
+            return ""
         if not txt:
             return ""
         try:

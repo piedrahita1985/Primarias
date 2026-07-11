@@ -26,8 +26,8 @@ from UI._mov_utils import (
 from UI._searchable_treeview import SearchableTreeview
 
 
-def open_window(master):
-    PrestamosWindow(master)
+def open_window(master, current_user=None):
+    PrestamosWindow(master, current_user=current_user)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,6 +187,12 @@ class FirmaBox(tk.Frame):
         self._clear_firma()
         resolved = _resolve_firma_path(path)
         if not resolved:
+            if str(path or "").strip():
+                messagebox.showwarning(
+                    "Firma",
+                    "No se encontró el archivo de firma del usuario seleccionado.",
+                    parent=self.winfo_toplevel(),
+                )
             self.lbl_firma.configure(image="", text="(Sin firma)",
                                      fg=COLORS["text_muted"],
                                      font=("Segoe UI", 9, "italic"))
@@ -592,6 +598,7 @@ class NuevaSolicitudWindow(tk.Toplevel):
         self._user = current_user
         self._on_saved = on_saved
         self._lotes = []
+        self._lotes_by_label = {}
         self._current_sustancia = None
 
         self._sustancias_by_codigo = common.map_sustancia_by_codigo(
@@ -727,8 +734,14 @@ class NuevaSolicitudWindow(tk.Toplevel):
             return
         self.v_nombre.set(sust.get("nombre", ""))
         self._lotes = prest.lotes_disponibles(sust.get("id"))
-        labels = [f"{l.get('lote', '')}  (Disp: {l.get('disponible', 0)})"
-                  for l in self._lotes]
+        self._lotes_by_label = {}
+        labels = []
+        for idx, lote in enumerate(self._lotes):
+            label = f"{lote.get('lote', '')}  (Disp: {lote.get('disponible', 0)})"
+            if label in self._lotes_by_label:
+                label = f"{label} #{idx + 1}"
+            self._lotes_by_label[label] = lote
+            labels.append(label)
         self.cb_lote.configure(values=labels)
         self.v_lote.set("")
         self.v_disp.set("")
@@ -744,10 +757,9 @@ class NuevaSolicitudWindow(tk.Toplevel):
         self._clear_stock_fields()
 
     def _on_lote_selected(self, _=None):
-        idx = self.cb_lote.current()
-        if idx < 0 or idx >= len(self._lotes):
+        lote = self._lotes_by_label.get(self.v_lote.get().strip())
+        if not lote:
             return
-        lote = self._lotes[idx]
         self.v_disp.set(str(lote.get("disponible", 0)))
         uni = common.map_by_id(self._maestras["unidades"]).get(
             lote.get("id_unidad"), {}
@@ -757,6 +769,7 @@ class NuevaSolicitudWindow(tk.Toplevel):
     def _clear_stock_fields(self):
         self._current_sustancia = None
         self._lotes = []
+        self._lotes_by_label = {}
         self.v_nombre.set("")
         self.cb_lote.configure(values=[])
         self.v_lote.set("")
@@ -769,8 +782,8 @@ class NuevaSolicitudWindow(tk.Toplevel):
         if self._current_sustancia is None:
             messagebox.showwarning("Aviso", "Seleccione un código válido.", parent=self)
             return
-        lote_idx = self.cb_lote.current()
-        if lote_idx < 0 or lote_idx >= len(self._lotes):
+        lote = self._lotes_by_label.get(self.v_lote.get().strip())
+        if not lote:
             messagebox.showwarning("Aviso", "Seleccione un lote.", parent=self)
             return
         try:
@@ -781,7 +794,6 @@ class NuevaSolicitudWindow(tk.Toplevel):
         if cantidad <= 0:
             messagebox.showwarning("Aviso", "La cantidad debe ser mayor a cero.", parent=self)
             return
-        lote = self._lotes[lote_idx]
         disponible = common.to_float(lote.get("disponible"))
         if cantidad > disponible:
             messagebox.showwarning("Aviso",
@@ -845,7 +857,7 @@ class PrestamosWindow(tk.Toplevel):
         "DEVUELTO":   ("#D4EDDA", "#155724"),
     }
 
-    def __init__(self, master):
+    def __init__(self, master, current_user=None):
         super().__init__(master)
         self.title("Préstamos de Estándares de Referencia")
         self.configure(bg=COLORS["secondary"])
@@ -853,21 +865,23 @@ class PrestamosWindow(tk.Toplevel):
 
         self._maestras     = common.cargar_maestras()
         self._users        = prest.usuarios_habilitados()
-        self._current_user = self._resolve_current_user(master)
+        self._current_user = self._resolve_current_user(master, current_user)
 
         draw_title(self, "Control y Seguimiento – Estándares de Referencia")
         self._build_ui()
         self._refresh_activos()
 
-    def _resolve_current_user(self, master):
-        try:
-            return master.current_user
-        except AttributeError:
-            pass
-        try:
-            return master.master.current_user
-        except AttributeError:
-            pass
+    def _resolve_current_user(self, master, current_user=None):
+        if isinstance(current_user, dict) and current_user.get("id"):
+            return current_user
+        user = getattr(master, "user_record", None)
+        if isinstance(user, dict) and user.get("id"):
+            return user
+        username = str(getattr(master, "username", "")).strip()
+        if username:
+            for row in self._users:
+                if row.get("usuario") == username or row.get("nombre") == username:
+                    return row
         return {}
 
     def _build_ui(self):
