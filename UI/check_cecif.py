@@ -106,7 +106,7 @@ class FirmaSelector(tk.Frame):
         )
         if ingresada is None:
             return False
-        if str(ingresada).strip() != firma_pass:
+        if not usr.verificar_firma_password(user, str(ingresada).strip()):
             messagebox.showerror("Firma", "Contraseña de firma incorrecta.", parent=self.winfo_toplevel())
             return False
         return True

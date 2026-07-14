@@ -16,6 +16,7 @@ from config.config import COLORS
 from logica import movimientos_common as common
 from logica import prestamos_logica as prest
 from logica import salidas_mov_logica as sal
+from logica import usuarios_logica as usr
 from UI._mov_utils import (
     apply_default_window,
     attach_treeview_sorting,
@@ -177,7 +178,7 @@ class FirmaBox(tk.Frame):
         )
         if ingresada is None:
             return False
-        if str(ingresada).strip() != pwd:
+        if not usr.verificar_firma_password(user, str(ingresada).strip()):
             messagebox.showerror("Firma", "Contraseña incorrecta.",
                                  parent=self.winfo_toplevel())
             return False

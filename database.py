@@ -28,6 +28,14 @@ try:
 except ImportError:
     _PYODBC_DISPONIBLE = False
 
+import auth
+
+# Tolerancia para comparaciones de stock: las conversiones repetidas
+# envases<->contenido (via presentacion) acumulan ruido de punto flotante del
+# orden de 1e-7/1e-8. Sin esta tolerancia, una cantidad que en la practica es
+# "exactamente la disponible" puede rechazarse por una diferencia microscopica.
+EPSILON_STOCK = 1e-6
+
 
 # ── Resolución de ruta base ─────────────────────────────────────────────────
 
@@ -61,18 +69,6 @@ def _cargar_config() -> dict:
     return CONFIG_DEFAULT
 
 
-# ── Normalización de estado ─────────────────────────────────────────────────
-# La app usa 'INHABILITADA'. Las tablas con CHECK usan 'DESHABILITADA'.
-# Estas funciones traducen en la frontera.
-
-def _a_db_estado(estado: str) -> str:
-    """Convierte 'INHABILITADA' → 'DESHABILITADA' para tablas con CHECK."""
-    return "DESHABILITADA" if str(estado or "").upper() == "INHABILITADA" else estado
-
-
-def _de_db_estado(estado: str) -> str:
-    """Convierte 'DESHABILITADA' → 'INHABILITADA' para el resto de la app."""
-    return "INHABILITADA" if str(estado or "").upper() == "DESHABILITADA" else estado
 
 
 # ── Migración de esquema ────────────────────────────────────────────────────
@@ -124,6 +120,81 @@ def _inventario_permite_anulado(conn) -> bool:
     return "ANULADO" in ddl.upper()
 
 
+def _tabla_tiene_check_deshabilitada(conn, tabla: str) -> bool:
+    """True si la tabla todavia tiene el CHECK legado que solo acepta
+    'DESHABILITADA' (instalaciones nuevas ya no lo tienen)."""
+    cur = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (tabla,)
+    )
+    row = cur.fetchone()
+    ddl = row[0] if row and row[0] else ""
+    return "DESHABILITADA" in ddl.upper()
+
+
+def _migrar_vocabulario_estado(conn):
+    """Reconstruye maestra_tipos_entrada/salida/usuarios sin el CHECK legado
+    que solo aceptaba 'DESHABILITADA', y convierte los datos existentes a
+    'INHABILITADA' (el termino que ya usa el resto de la app y de las
+    tablas de catalogo, que nunca tuvieron ese CHECK)."""
+    if _tabla_tiene_check_deshabilitada(conn, "maestra_tipos_entrada"):
+        conn.execute("""
+            CREATE TABLE maestra_tipos_entrada_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tipo_entrada TEXT NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'HABILITADA'
+            )
+        """)
+        conn.execute("""
+            INSERT INTO maestra_tipos_entrada_new (id, tipo_entrada, estado)
+            SELECT id, tipo_entrada,
+                   CASE WHEN estado='DESHABILITADA' THEN 'INHABILITADA' ELSE estado END
+              FROM maestra_tipos_entrada
+        """)
+        conn.execute("DROP TABLE maestra_tipos_entrada")
+        conn.execute("ALTER TABLE maestra_tipos_entrada_new RENAME TO maestra_tipos_entrada")
+
+    if _tabla_tiene_check_deshabilitada(conn, "maestra_tipos_salida"):
+        conn.execute("""
+            CREATE TABLE maestra_tipos_salida_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tipo_salida TEXT NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'HABILITADA'
+            )
+        """)
+        conn.execute("""
+            INSERT INTO maestra_tipos_salida_new (id, tipo_salida, estado)
+            SELECT id, tipo_salida,
+                   CASE WHEN estado='DESHABILITADA' THEN 'INHABILITADA' ELSE estado END
+              FROM maestra_tipos_salida
+        """)
+        conn.execute("DROP TABLE maestra_tipos_salida")
+        conn.execute("ALTER TABLE maestra_tipos_salida_new RENAME TO maestra_tipos_salida")
+
+    if _tabla_tiene_check_deshabilitada(conn, "maestra_usuarios"):
+        conn.execute("""
+            CREATE TABLE maestra_usuarios_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario TEXT NOT NULL UNIQUE,
+                contrasena TEXT NOT NULL,
+                nombre TEXT NOT NULL,
+                rol TEXT NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'HABILITADA',
+                firma_path TEXT,
+                firma_password TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO maestra_usuarios_new
+                (id, usuario, contrasena, nombre, rol, estado, firma_path, firma_password)
+            SELECT id, usuario, contrasena, nombre, rol,
+                   CASE WHEN estado='DESHABILITADA' THEN 'INHABILITADA' ELSE estado END,
+                   firma_path, firma_password
+              FROM maestra_usuarios
+        """)
+        conn.execute("DROP TABLE maestra_usuarios")
+        conn.execute("ALTER TABLE maestra_usuarios_new RENAME TO maestra_usuarios")
+
+
 def _migrar_schema(conn):
     """
     Añade columnas faltantes a tablas existentes (idempotente).
@@ -153,6 +224,8 @@ def _migrar_schema(conn):
         ("fecha_entrada",    "TEXT"),
         ("factura",          "TEXT"),
         ("observaciones",    "TEXT"),
+        ("costo_unitario",   "REAL"),
+        ("costo_total",      "REAL"),
     ]
     for col, tipo in extra_inventario:
         if not _col_existe(conn, "log_inventario", col):
@@ -396,6 +469,30 @@ def _migrar_schema(conn):
                 f"ALTER TABLE maestra_permisos_usuario RENAME COLUMN {col_vieja} TO {col_nueva}"
             )
 
+    _migrar_vocabulario_estado(conn)
+
+    # ── 8. Deduplicar y forzar unicidad en maestra_permisos_usuario ──────────
+    # Instalaciones migradas desde versiones antiguas pueden tener varias filas
+    # de permisos para el mismo usuario (sin restriccion de unicidad en id_usuario).
+    conn.execute("""
+        DELETE FROM maestra_permisos_usuario
+         WHERE id NOT IN (
+            SELECT MIN(id) FROM maestra_permisos_usuario GROUP BY id_usuario
+         )
+    """)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_permisos_usuario "
+        "ON maestra_permisos_usuario(id_usuario)"
+    )
+
+    # ── 9. Indices en columnas FK muy consultadas ────────────────────────────
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_entradas_inventario ON log_entradas(id_inventario)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_salidas_inventario ON log_salidas(id_inventario)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_check_cecif_entrada ON log_check_cecif(id_entrada)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_check_cecif_sustancia ON log_check_cecif(id_sustancia)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_check_clientes_entrada ON log_check_clientes(id_entrada)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_check_clientes_sustancia ON log_check_clientes(id_sustancia)")
+
     conn.execute("PRAGMA foreign_keys = ON")
     conn.commit()
 
@@ -426,6 +523,8 @@ def _migrar_schema_hibrido(conn, motor: str) -> None:
         ("fecha_entrada",   "NVARCHAR(30)",           None),
         ("factura",         "NVARCHAR(MAX)",          None),
         ("observaciones",   "NVARCHAR(MAX)",          None),
+        ("costo_unitario",  "FLOAT",                  None),
+        ("costo_total",     "FLOAT",                  None),
     ]
     for col, tipo, default in extra_inventario:
         if not _col_existe_universal(conn, motor, "log_inventario", col):
@@ -493,6 +592,42 @@ def _migrar_schema_hibrido(conn, motor: str) -> None:
             cursor.execute(
                 f"EXEC sp_rename 'maestra_permisos_usuario.{col_vieja}', '{col_nueva}', 'COLUMN'"
             )
+
+    # ── Unicidad de permisos por usuario e indices en columnas FK ────────────
+    def _crear_indice_si_no_existe(nombre_indice, ddl_create):
+        cursor.execute(
+            f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = '{nombre_indice}') "
+            f"BEGIN {ddl_create} END"
+        )
+
+    _crear_indice_si_no_existe(
+        "uq_permisos_usuario",
+        "CREATE UNIQUE INDEX uq_permisos_usuario ON maestra_permisos_usuario(id_usuario)",
+    )
+    _crear_indice_si_no_existe(
+        "idx_entradas_inventario",
+        "CREATE INDEX idx_entradas_inventario ON log_entradas(id_inventario)",
+    )
+    _crear_indice_si_no_existe(
+        "idx_salidas_inventario",
+        "CREATE INDEX idx_salidas_inventario ON log_salidas(id_inventario)",
+    )
+    _crear_indice_si_no_existe(
+        "idx_check_cecif_entrada",
+        "CREATE INDEX idx_check_cecif_entrada ON log_check_cecif(id_entrada)",
+    )
+    _crear_indice_si_no_existe(
+        "idx_check_cecif_sustancia",
+        "CREATE INDEX idx_check_cecif_sustancia ON log_check_cecif(id_sustancia)",
+    )
+    _crear_indice_si_no_existe(
+        "idx_check_clientes_entrada",
+        "CREATE INDEX idx_check_clientes_entrada ON log_check_clientes(id_entrada)",
+    )
+    _crear_indice_si_no_existe(
+        "idx_check_clientes_sustancia",
+        "CREATE INDEX idx_check_clientes_sustancia ON log_check_clientes(id_sustancia)",
+    )
     conn.commit()
 
 
@@ -633,6 +768,8 @@ def _crear_tablas_sqlserver(conn) -> None:
             fecha_entrada NVARCHAR(30),
             factura NVARCHAR(MAX),
             observaciones NVARCHAR(MAX),
+            costo_unitario FLOAT,
+            costo_total FLOAT,
             FOREIGN KEY (id_sustancia) REFERENCES maestra_sustancias(id)
         )
     """)
@@ -867,7 +1004,9 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
             factura_compra INTEGER NOT NULL DEFAULT 0,
             fecha_entrada TEXT,
             factura TEXT,
-            observaciones TEXT
+            observaciones TEXT,
+            costo_unitario REAL,
+            costo_total REAL
         );
 
         CREATE TABLE IF NOT EXISTS log_entradas (
@@ -1106,8 +1245,12 @@ class KardexDB:
     # ══════════════════════════════════════════════════════════════════════
 
     def get_usuario_login(self, usuario: str, contrasena: str) -> Optional[dict]:
+        """Autentica por usuario/contrasena. Verifica el hash bcrypt; si la
+        contrasena almacenada aun esta en texto plano (cuentas legadas), la
+        rehashea automaticamente tras un login exitoso (migracion perezosa)."""
+        ph = self._ph()
         u = self._fetchone(
-            """
+            f"""
             SELECT u.id, u.usuario, u.contrasena, u.nombre, u.rol, u.estado,
                    u.firma_path, u.firma_password,
                    p.log_entradas, p.log_salidas, p.log_inventario, p.log_bitacora, p.log_prestamos,
@@ -1116,14 +1259,22 @@ class KardexDB:
                    p.maestra_colores, p.maestra_usuarios
               FROM maestra_usuarios u
               LEFT JOIN maestra_permisos_usuario p ON p.id_usuario = u.id
-             WHERE u.usuario = ? AND u.contrasena = ? AND u.estado = 'HABILITADA'
+             WHERE u.usuario = {ph} AND u.estado = 'HABILITADA'
             """,
-            (usuario, contrasena),
+            (usuario,),
         )
-        if u:
-            u["estado"] = _de_db_estado(u.get("estado", "HABILITADA"))
-            u = self._normalizar_usuario(u)
-        return u
+        if not u or not auth.verify_password(contrasena, u.get("contrasena", "")):
+            return None
+        if not auth.is_hashed(u.get("contrasena", "")):
+            nuevo_hash = auth.hash_password(contrasena)
+            self._execute(
+                f"UPDATE maestra_usuarios SET contrasena={ph} WHERE id={ph}",
+                (nuevo_hash, u["id"]),
+            )
+            self.commit()
+            u["contrasena"] = nuevo_hash
+        u["estado"] = u.get("estado", "HABILITADA")
+        return self._normalizar_usuario(u)
 
     def get_usuarios(self) -> list:
         rows = self._fetchall(
@@ -1141,7 +1292,7 @@ class KardexDB:
         )
         result = []
         for u in rows:
-            u["estado"] = _de_db_estado(u.get("estado", "HABILITADA"))
+            u["estado"] = u.get("estado", "HABILITADA")
             result.append(self._normalizar_usuario(u))
         return result
 
@@ -1168,15 +1319,16 @@ class KardexDB:
 
     def crear_usuario(self, datos: dict) -> int:
         ph = self._ph()
+        firma_password = datos.get("permisos", {}).get("firma_password")
         uid = self._insert(
             f"""INSERT INTO maestra_usuarios
                 (usuario, contrasena, nombre, rol, estado, firma_path, firma_password)
                 VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
             (
-                datos["usuario"], datos["contrasena"], datos["nombre"],
-                datos.get("rol", ""), _a_db_estado(datos.get("estado", "HABILITADA")),
+                datos["usuario"], auth.hash_password(datos["contrasena"]), datos["nombre"],
+                datos.get("rol", ""), datos.get("estado", "HABILITADA"),
                 datos.get("permisos", {}).get("firma_path"),
-                datos.get("permisos", {}).get("firma_password"),
+                auth.hash_password(firma_password) if firma_password else firma_password,
             ),
         )
         self._insertar_permisos(uid, datos.get("permisos", {}))
@@ -1184,21 +1336,22 @@ class KardexDB:
 
     def actualizar_usuario(self, id_usuario: int, datos: dict):
         ph = self._ph()
+        firma_password = datos.get("permisos", {}).get("firma_password")
         self._execute(
             f"""UPDATE maestra_usuarios SET nombre={ph}, rol={ph}, estado={ph},
                 firma_path={ph}, firma_password={ph} WHERE id={ph}""",
             (
                 datos["nombre"], datos.get("rol", ""),
-                _a_db_estado(datos.get("estado", "HABILITADA")),
+                datos.get("estado", "HABILITADA"),
                 datos.get("permisos", {}).get("firma_path"),
-                datos.get("permisos", {}).get("firma_password"),
+                auth.hash_password(firma_password) if firma_password else firma_password,
                 id_usuario,
             ),
         )
         if datos.get("contrasena"):
             self._execute(
                 f"UPDATE maestra_usuarios SET contrasena={ph} WHERE id={ph}",
-                (datos["contrasena"], id_usuario),
+                (auth.hash_password(datos["contrasena"]), id_usuario),
             )
         if "permisos" in datos:
             self._actualizar_permisos(id_usuario, datos["permisos"])
@@ -1216,7 +1369,7 @@ class KardexDB:
         ph = self._ph()
         self._execute(
             f"UPDATE maestra_usuarios SET estado={ph} WHERE id={ph}",
-            ("DESHABILITADA", id_usuario),
+            ("INHABILITADA", id_usuario),
         )
         self.commit()
 
@@ -1231,10 +1384,20 @@ class KardexDB:
         ph = self._ph()
         cols = ",".join(campos)
         phs = ",".join([ph] * len(campos))
-        self._execute(
-            f"INSERT INTO maestra_permisos_usuario (id_usuario,{cols}) VALUES ({ph},{phs})",
-            (id_usuario, *vals),
-        )
+        if self._motor == "sqlite":
+            # Idempotente: si ya existe una fila de permisos para este usuario
+            # (p.ej. llamado dos veces), actualiza en vez de duplicar.
+            updates = ",".join([f"{c}=excluded.{c}" for c in campos])
+            self._execute(
+                f"""INSERT INTO maestra_permisos_usuario (id_usuario,{cols}) VALUES ({ph},{phs})
+                    ON CONFLICT(id_usuario) DO UPDATE SET {updates}""",
+                (id_usuario, *vals),
+            )
+        else:
+            self._execute(
+                f"INSERT INTO maestra_permisos_usuario (id_usuario,{cols}) VALUES ({ph},{phs})",
+                (id_usuario, *vals),
+            )
         self.commit()
 
     def _actualizar_permisos(self, id_usuario: int, permisos: dict):
@@ -1405,7 +1568,7 @@ class KardexDB:
         )
         rows = self._fetchall(sql)
         for r in rows:
-            r["estado"] = _de_db_estado(r.get("estado", "HABILITADA"))
+            r["estado"] = r.get("estado", "HABILITADA")
         return rows
 
     def crear_tipo_entrada(self, tipo: str) -> int:
@@ -1418,7 +1581,7 @@ class KardexDB:
         ph = self._ph()
         self._execute(
             f"UPDATE maestra_tipos_entrada SET tipo_entrada={ph}, estado={ph} WHERE id={ph}",
-            (tipo, _a_db_estado(estado), id_),
+            (tipo, estado, id_),
         )
         self.commit()
 
@@ -1433,7 +1596,7 @@ class KardexDB:
         ph = self._ph()
         self._execute(
             f"UPDATE maestra_tipos_entrada SET estado={ph} WHERE id={ph}",
-            ("DESHABILITADA", id_),
+            ("INHABILITADA", id_),
         )
         self.commit()
 
@@ -1447,7 +1610,7 @@ class KardexDB:
         )
         rows = self._fetchall(sql)
         for r in rows:
-            r["estado"] = _de_db_estado(r.get("estado", "HABILITADA"))
+            r["estado"] = r.get("estado", "HABILITADA")
         return rows
 
     def crear_tipo_salida(self, tipo: str) -> int:
@@ -1460,7 +1623,7 @@ class KardexDB:
         ph = self._ph()
         self._execute(
             f"UPDATE maestra_tipos_salida SET tipo_salida={ph}, estado={ph} WHERE id={ph}",
-            (tipo, _a_db_estado(estado), id_),
+            (tipo, estado, id_),
         )
         self.commit()
 
@@ -1475,7 +1638,7 @@ class KardexDB:
         ph = self._ph()
         self._execute(
             f"UPDATE maestra_tipos_salida SET estado={ph} WHERE id={ph}",
-            ("DESHABILITADA", id_),
+            ("INHABILITADA", id_),
         )
         self.commit()
 
@@ -1659,9 +1822,10 @@ class KardexDB:
                  cantidad_actual, estado,
                  potencia, catalogo, presentacion,
                  certificado_anl, ficha_seguridad, factura_compra,
-                 fecha_entrada, factura, observaciones)
+                 fecha_entrada, factura, observaciones,
+                 costo_unitario, costo_total)
                 VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},
-                        {ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
+                        {ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
             (
                 datos["id_sustancia"],
                 datos.get("id_ubicacion"),
@@ -1682,6 +1846,8 @@ class KardexDB:
                 datos.get("fecha_entrada"),
                 datos.get("factura"),
                 datos.get("observaciones"),
+                datos.get("costo_unitario"),
+                datos.get("costo_total"),
             ),
         )
 
@@ -1695,7 +1861,8 @@ class KardexDB:
                 lote={ph}, fecha_vencimiento={ph},
                 potencia={ph}, catalogo={ph}, presentacion={ph},
                 certificado_anl={ph}, ficha_seguridad={ph}, factura_compra={ph},
-                fecha_entrada={ph}, factura={ph}, observaciones={ph}
+                fecha_entrada={ph}, factura={ph}, observaciones={ph},
+                costo_unitario={ph}, costo_total={ph}
                 WHERE id={ph}""",
             (
                 datos.get("id_sustancia"),
@@ -1715,21 +1882,77 @@ class KardexDB:
                 datos.get("fecha_entrada"),
                 datos.get("factura"),
                 datos.get("observaciones"),
+                datos.get("costo_unitario"),
+                datos.get("costo_total"),
                 id_inv,
             ),
         )
         self.commit()
 
-    def actualizar_stock(self, id_inventario: int, nueva_cantidad: float):
-        ph = self._ph()
-        if nueva_cantidad <= 0:
-            estado = "AGOTADO"
-        else:
-            estado = "ACTIVO"
-        self._execute(
-            f"UPDATE log_inventario SET cantidad_actual={ph}, estado={ph} WHERE id={ph}",
-            (nueva_cantidad, estado, id_inventario),
+    def get_entrada_original(self, id_inventario: int) -> Optional[dict]:
+        """Fila original de log_entradas de un lote (acceso a datos puro;
+        la logica de negocio de entradas_mov_logica.py decide que hacer con
+        ella al editar cantidad/tipo)."""
+        return self._fetchone(
+            f"SELECT id, cantidad, id_tipo_entrada FROM log_entradas "
+            f"WHERE id_inventario={self._ph()} ORDER BY id ASC LIMIT 1",
+            (id_inventario,),
         )
+
+    def actualizar_movimiento_entrada(
+        self, id_entrada_mov: int, cantidad: float = None,
+        id_tipo_entrada: int = None, certificado: int = None,
+    ) -> None:
+        """Actualiza columnas puntuales de un movimiento de entrada (solo las
+        que vienen no-None). Acceso a datos puro: no decide si corresponde
+        cambiar el stock, eso ya lo valida/aplica la capa de negocio."""
+        ph = self._ph()
+        sets, vals = [], []
+        if cantidad is not None:
+            sets.append(f"cantidad={ph}")
+            vals.append(cantidad)
+        if id_tipo_entrada is not None:
+            sets.append(f"id_tipo_entrada={ph}")
+            vals.append(id_tipo_entrada)
+        if certificado is not None:
+            sets.append(f"certificado={ph}")
+            vals.append(certificado)
+        if not sets:
+            return
+        vals.append(id_entrada_mov)
+        self._execute(f"UPDATE log_entradas SET {', '.join(sets)} WHERE id={ph}", tuple(vals))
+        self.commit()
+
+    def get_stock_actual(self, id_inventario: int) -> Optional[float]:
+        """Cantidad actual (envases) de un lote, o None si el lote no existe."""
+        row = self._fetchone(
+            f"SELECT cantidad_actual FROM log_inventario WHERE id={self._ph()}",
+            (id_inventario,),
+        )
+        if row is None:
+            return None
+        return float(row.get("cantidad_actual") or 0)
+
+    def actualizar_stock(self, id_inventario: int, nueva_cantidad: float):
+        """Actualiza cantidad_actual y deriva ACTIVO/AGOTADO segun corresponda.
+        Un lote ya ANULADO no se "revive": solo se ajusta cantidad_actual, sin
+        tocar su estado (ej. al restaurar stock de una salida anulada en
+        cascada junto con la entrada que la origino)."""
+        ph = self._ph()
+        actual = self._fetchone(
+            f"SELECT estado FROM log_inventario WHERE id={ph}", (id_inventario,)
+        )
+        if str((actual or {}).get("estado") or "").upper() == "ANULADO":
+            self._execute(
+                f"UPDATE log_inventario SET cantidad_actual={ph} WHERE id={ph}",
+                (nueva_cantidad, id_inventario),
+            )
+        else:
+            estado = "AGOTADO" if nueva_cantidad <= 0 else "ACTIVO"
+            self._execute(
+                f"UPDATE log_inventario SET cantidad_actual={ph}, estado={ph} WHERE id={ph}",
+                (nueva_cantidad, estado, id_inventario),
+            )
         self.commit()
 
     def anular_inventario(self, id_inv: int):
@@ -1761,11 +1984,14 @@ class KardexDB:
 
     def crear_entrada(self, datos: dict, id_usuario: int) -> int:
         """
-        Crea un movimiento de entrada y actualiza stock en inventario.
+        Inserta un movimiento de entrada (acceso a datos puro).
         datos debe incluir: id_inventario, id_tipo_entrada, cantidad.
+        El ajuste de stock lo hace la capa de negocio (entradas_mov_logica.py)
+        con get_stock_actual()/actualizar_stock(), para no mezclar la
+        validacion/calculo con el INSERT.
         """
         ph = self._ph()
-        id_entrada = self._insert(
+        return self._insert(
             f"""INSERT INTO log_entradas
                 (id_inventario, id_tipo_entrada, id_usuario,
                  fecha_hora, cantidad, observacion, certificado)
@@ -1778,13 +2004,6 @@ class KardexDB:
                 datos.get("certificado"),
             ),
         )
-        inv = self._fetchone(
-            f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
-            (datos["id_inventario"],),
-        )
-        nueva = (inv["cantidad_actual"] or 0) + float(datos["cantidad"])
-        self.actualizar_stock(datos["id_inventario"], nueva)
-        return id_entrada
 
     # ══════════════════════════════════════════════════════════════════════
     # SALIDAS (movimientos de egreso)
@@ -1815,6 +2034,13 @@ class KardexDB:
         """
         Crea un movimiento de salida. Valida stock suficiente.
         datos debe incluir: id_inventario, id_tipo_salida, cantidad.
+
+        Nota (alcance de la extraccion de logica de negocio, ver database.py):
+        este metodo NO se simplifico a un INSERT puro como crear_entrada/
+        actualizar_salida porque tambien lo usa internamente responder_prestamo()
+        (mas abajo, seccion PRESTAMOS) para registrar la salida generada por un
+        prestamo aceptado. Extraer su validacion/ajuste de stock implicaria
+        tocar la maquina de estados de prestamos, que quedo fuera de esta pasada.
         """
         ph = self._ph()
         inv = self._fetchone(
@@ -1822,7 +2048,7 @@ class KardexDB:
             (datos.get("id_inventario") or datos.get("id_entrada"),),
         )
         id_inv = datos.get("id_inventario") or datos.get("id_entrada")
-        if not inv or (inv["cantidad_actual"] or 0) < float(datos["cantidad"]):
+        if not inv or (inv["cantidad_actual"] or 0) < float(datos["cantidad"]) - EPSILON_STOCK:
             raise ValueError("Stock insuficiente para realizar la salida.")
 
         id_salida = self._insert(
@@ -1844,47 +2070,58 @@ class KardexDB:
                 datos.get("factura"),
             ),
         )
-        nueva = (inv["cantidad_actual"] or 0) - float(datos["cantidad"])
+        nueva = max(0.0, (inv["cantidad_actual"] or 0) - float(datos["cantidad"]))
         self.actualizar_stock(id_inv, nueva)
         return id_salida
 
+    def get_salida(self, id_salida: int) -> Optional[dict]:
+        """Fila cruda de una salida (acceso a datos puro)."""
+        return self._fetchone(f"SELECT * FROM log_salidas WHERE id={self._ph()}", (id_salida,))
+
     def actualizar_salida(self, id_salida: int, datos: dict):
+        """Actualiza los campos de una salida (acceso a datos puro: UPDATE
+        directo). La validacion de stock y la reconciliacion entre lotes al
+        cambiar cantidad/lote las hace salidas_mov_logica.actualizar()."""
         ph = self._ph()
         self._execute(
             f"""UPDATE log_salidas SET
-                actividad={ph}, observacion={ph}, fecha_salida={ph}
+                id_inventario={ph}, id_tipo_salida={ph}, cantidad={ph},
+                actividad={ph}, observacion={ph}, fecha_salida={ph}, factura={ph}
                 WHERE id={ph}""",
-            (datos.get("actividad"), datos.get("observacion"),
-             datos.get("fecha_salida"), id_salida),
+            (
+                datos["id_inventario"],
+                datos["id_tipo_salida"],
+                float(datos["cantidad"]),
+                datos.get("actividad"),
+                datos.get("observacion"),
+                datos.get("fecha_salida"),
+                datos.get("factura"),
+                id_salida,
+            ),
         )
         self.commit()
 
-    def anular_salida(self, id_salida: int):
-        """Anula la salida y restaura el stock."""
+    def marcar_salida_anulada(self, id_salida: int) -> None:
+        """Marca una salida como ANULADA (acceso a datos puro; restaurar el
+        stock lo hace salidas_mov_logica.anular())."""
         ph = self._ph()
-        salida = self._fetchone(
-            f"SELECT * FROM log_salidas WHERE id={ph}", (id_salida,)
-        )
-        if not salida or salida.get("estado") == "ANULADA":
-            return
         self._execute(
             f"UPDATE log_salidas SET estado={ph} WHERE id={ph}", ("ANULADA", id_salida)
         )
-        inv = self._fetchone(
-            f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
-            (salida["id_inventario"],),
-        )
-        if inv:
-            nueva = (inv["cantidad_actual"] or 0) + float(salida.get("cantidad", 0))
-            self.actualizar_stock(salida["id_inventario"], nueva)
+        self.commit()
 
     # ══════════════════════════════════════════════════════════════════════
     # PRÉSTAMOS (sistema bilateral de préstamos entre usuarios)
     # ══════════════════════════════════════════════════════════════════════
 
-    def _enriquecer_prestamo(self, p: dict) -> dict:
-        """Añade nombre de sustancia, lote y nombres de usuario al prestamo."""
-        inv = self._fetchone(
+    def _lookup_inventario_prestamos(self, ids: list) -> dict:
+        """Trae en una sola consulta el inventario+sustancia+unidad+fabricante+
+        ubicacion de todos los id_inventario dados. {id: fila}"""
+        ids = sorted({i for i in ids if i is not None})
+        if not ids:
+            return {}
+        phs = ",".join([self._ph()] * len(ids))
+        rows = self._fetchall(
             f"SELECT i.*, s.nombre AS sustancia, s.codigo, s.propiedad, "
             f"un.unidad, f.fabricante AS fabricante_nombre, "
             f"u.ubicacion, u.no_caja "
@@ -1893,58 +2130,77 @@ class KardexDB:
             f"LEFT JOIN maestra_unidades un ON un.id=i.id_unidad "
             f"LEFT JOIN maestra_fabricantes f ON f.id=i.id_fabricante "
             f"LEFT JOIN maestra_ubicaciones u ON u.id=i.id_ubicacion "
-            f"WHERE i.id={self._ph()}",
-            (p.get("id_inventario"),),
-        ) or {}
-        presta = self._fetchone(
-            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
-            (p.get("id_usuario"),),
-        ) or {}
-        destino = self._fetchone(
-            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
-            (p.get("id_usuario_destino"),),
-        ) or {}
-        entregador = self._fetchone(
-            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
-            (p.get("id_usuario_entregador"),),
-        ) or {} if p.get("id_usuario_entregador") else {}
-        analista = self._fetchone(
-            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
-            (p.get("id_usuario_analista"),),
-        ) or {} if p.get("id_usuario_analista") else {}
-        verificador = self._fetchone(
-            f"SELECT nombre, usuario FROM maestra_usuarios WHERE id={self._ph()}",
-            (p.get("id_usuario_verificador"),),
-        ) or {} if p.get("id_usuario_verificador") else {}
-        return {
-            **p,
-            "id_entrada": p.get("id_inventario"),
-            "id_sustancia": inv.get("id_sustancia"),
-            "id_unidad": inv.get("id_unidad"),
-            "codigo": inv.get("codigo", ""),
-            "nombre": inv.get("sustancia", ""),
-            "lote": inv.get("lote", ""),
-            "fecha_vencimiento": inv.get("fecha_vencimiento", ""),
-            "potencia": inv.get("potencia", ""),
-            "propiedad": inv.get("propiedad", ""),
-            "fabricante_nombre": inv.get("fabricante_nombre", ""),
-            "ubicacion": inv.get("ubicacion", ""),
-            "no_caja": inv.get("no_caja", ""),
-            "maestra_unidades": inv.get("maestra_unidades", ""),
-            "id_usuario_presta": p.get("id_usuario"),
-            "usuario_presta_nombre": presta.get("nombre") or presta.get("usuario", ""),
-            "usuario_destino_nombre": destino.get("nombre") or destino.get("usuario", ""),
-            "usuario_entregador_nombre": entregador.get("nombre") or entregador.get("usuario", ""),
-            "usuario_analista_nombre": analista.get("nombre") or analista.get("usuario", ""),
-            "usuario_verificador_nombre": verificador.get("nombre") or verificador.get("usuario", ""),
-            "fecha_prestamo": p.get("fecha_prestamo") or p.get("fecha_hora", "")[:10],
-        }
+            f"WHERE i.id IN ({phs})",
+            tuple(ids),
+        )
+        return {r["id"]: r for r in rows}
+
+    def _lookup_usuarios_prestamos(self, ids: list) -> dict:
+        """Trae en una sola consulta nombre/usuario de todos los ids de usuario dados."""
+        ids = sorted({i for i in ids if i is not None})
+        if not ids:
+            return {}
+        phs = ",".join([self._ph()] * len(ids))
+        rows = self._fetchall(
+            f"SELECT id, nombre, usuario FROM maestra_usuarios WHERE id IN ({phs})",
+            tuple(ids),
+        )
+        return {r["id"]: r for r in rows}
+
+    def _enriquecer_prestamos(self, rows: list) -> list:
+        """Añade nombre de sustancia, lote y nombres de usuario a una lista de
+        prestamos con dos consultas en bloque (evita el patron N+1: antes se
+        hacian hasta 5 SELECT adicionales por cada fila de prestamo)."""
+        if not rows:
+            return []
+        inv_by_id = self._lookup_inventario_prestamos([p.get("id_inventario") for p in rows])
+        ids_usuarios = []
+        for p in rows:
+            ids_usuarios.extend([
+                p.get("id_usuario"), p.get("id_usuario_destino"),
+                p.get("id_usuario_entregador"), p.get("id_usuario_analista"),
+                p.get("id_usuario_verificador"),
+            ])
+        usuarios_by_id = self._lookup_usuarios_prestamos(ids_usuarios)
+
+        out = []
+        for p in rows:
+            inv = inv_by_id.get(p.get("id_inventario"), {})
+            presta = usuarios_by_id.get(p.get("id_usuario"), {})
+            destino = usuarios_by_id.get(p.get("id_usuario_destino"), {})
+            entregador = usuarios_by_id.get(p.get("id_usuario_entregador"), {})
+            analista = usuarios_by_id.get(p.get("id_usuario_analista"), {})
+            verificador = usuarios_by_id.get(p.get("id_usuario_verificador"), {})
+            out.append({
+                **p,
+                "id_entrada": p.get("id_inventario"),
+                "id_sustancia": inv.get("id_sustancia"),
+                "id_unidad": inv.get("id_unidad"),
+                "codigo": inv.get("codigo", ""),
+                "nombre": inv.get("sustancia", ""),
+                "lote": inv.get("lote", ""),
+                "fecha_vencimiento": inv.get("fecha_vencimiento", ""),
+                "potencia": inv.get("potencia", ""),
+                "propiedad": inv.get("propiedad", ""),
+                "fabricante_nombre": inv.get("fabricante_nombre", ""),
+                "ubicacion": inv.get("ubicacion", ""),
+                "no_caja": inv.get("no_caja", ""),
+                "maestra_unidades": inv.get("maestra_unidades", ""),
+                "id_usuario_presta": p.get("id_usuario"),
+                "usuario_presta_nombre": presta.get("nombre") or presta.get("usuario", ""),
+                "usuario_destino_nombre": destino.get("nombre") or destino.get("usuario", ""),
+                "usuario_entregador_nombre": entregador.get("nombre") or entregador.get("usuario", ""),
+                "usuario_analista_nombre": analista.get("nombre") or analista.get("usuario", ""),
+                "usuario_verificador_nombre": verificador.get("nombre") or verificador.get("usuario", ""),
+                "fecha_prestamo": p.get("fecha_prestamo") or p.get("fecha_hora", "")[:10],
+            })
+        return out
 
     def get_prestamos(self) -> list:
         rows = self._fetchall(
             "SELECT * FROM log_prestamos ORDER BY fecha_hora DESC"
         )
-        return [self._enriquecer_prestamo(p) for p in rows]
+        return self._enriquecer_prestamos(rows)
 
     def get_prestamos_activos(self) -> list:
         """Préstamos en estado SOLICITADO o PRESTADO."""
@@ -1952,7 +2208,7 @@ class KardexDB:
             f"SELECT * FROM log_prestamos WHERE estado IN ({self._ph()},{self._ph()}) ORDER BY fecha_hora DESC",
             ("SOLICITADO", "PRESTADO"),
         )
-        return [self._enriquecer_prestamo(p) for p in rows]
+        return self._enriquecer_prestamos(rows)
 
     def get_prestamos_completados(self) -> list:
         """Préstamos en estado DEVUELTO (historial)."""
@@ -1960,7 +2216,7 @@ class KardexDB:
             f"SELECT * FROM log_prestamos WHERE estado={self._ph()} ORDER BY fecha_hora DESC",
             ("DEVUELTO",),
         )
-        return [self._enriquecer_prestamo(p) for p in rows]
+        return self._enriquecer_prestamos(rows)
 
     def get_prestamos_emitidos(self, id_usuario: int, mes: str = "", limit: int = 15) -> list:
         rows = self._fetchall(
@@ -1971,28 +2227,28 @@ class KardexDB:
             rows = [r for r in rows if str(r.get("fecha_prestamo") or r.get("fecha_hora", "")).startswith(mes)]
         if limit and limit > 0:
             rows = rows[:limit]
-        return [self._enriquecer_prestamo(p) for p in rows]
+        return self._enriquecer_prestamos(rows)
 
     def get_prestamos_pendientes_para(self, id_usuario_destino: int) -> list:
         rows = self._fetchall(
             f"SELECT * FROM log_prestamos WHERE id_usuario_destino={self._ph()} AND estado='PENDIENTE' ORDER BY fecha_hora DESC",
             (id_usuario_destino,),
         )
-        return [self._enriquecer_prestamo(p) for p in rows]
+        return self._enriquecer_prestamos(rows)
 
     def get_recibidos_pendientes_para(self, id_usuario_destino: int) -> list:
         rows = self._fetchall(
             f"SELECT * FROM log_prestamos WHERE id_usuario_destino={self._ph()} AND estado_recepcion='PENDIENTE' ORDER BY fecha_hora DESC",
             (id_usuario_destino,),
         )
-        return [self._enriquecer_prestamo(p) for p in rows]
+        return self._enriquecer_prestamos(rows)
 
     def get_devoluciones_pendientes_para(self, id_usuario_destino: int) -> list:
         rows = self._fetchall(
             f"SELECT * FROM log_prestamos WHERE id_usuario_destino={self._ph()} AND estado_recepcion='RECIBIDO' AND estado_devolucion='PENDIENTE' ORDER BY fecha_hora DESC",
             (id_usuario_destino,),
         )
-        return [self._enriquecer_prestamo(p) for p in rows]
+        return self._enriquecer_prestamos(rows)
 
     def get_meses_prestamos_emitidos(self, id_usuario: int) -> list:
         rows = self._fetchall(
@@ -2063,7 +2319,7 @@ class KardexDB:
             disponible_envases = float(inv.get("cantidad_actual") or 0)
             if cantidad_envases <= 0:
                 return False, "La cantidad del préstamo debe ser mayor a cero."
-            if cantidad_envases > disponible_envases:
+            if cantidad_envases > disponible_envases + EPSILON_STOCK:
                 return False, "Stock insuficiente para aceptar el préstamo."
 
             # Crear salida por el préstamo
@@ -2179,12 +2435,12 @@ class KardexDB:
             disponible_envases = float(inv.get("cantidad_actual") or 0)
             if cantidad_envases <= 0:
                 raise ValueError("La cantidad del préstamo debe ser mayor a cero.")
-            if cantidad_envases > disponible_envases:
+            if cantidad_envases > disponible_envases + EPSILON_STOCK:
                 raise ValueError(
                     "Stock insuficiente para entregar el préstamo. "
                     f"Disponible: {round(disponible_envases * presentacion, 4)}"
                 )
-            nueva = disponible_envases - cantidad_envases
+            nueva = max(0.0, disponible_envases - cantidad_envases)
             self.actualizar_stock(prestamo["id_inventario"], nueva)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._execute(

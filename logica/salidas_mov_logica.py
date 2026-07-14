@@ -62,12 +62,61 @@ def agregar(record, usuario="SISTEMA"):
 
 
 def actualizar(id_salida, cambios, usuario="SISTEMA"):
+    """Actualiza una salida, incluyendo cantidad y/o lote. Valida el stock
+    disponible ANTES de mutar nada (para no dejar el stock en un estado
+    intermedio si la validacion falla), y reconcilia el stock entre el lote
+    original y el nuevo si la salida se mueve de lote."""
     cambios = _normalize_record_fields(cambios)
     db = get_db()
     try:
         rows = db.get_salidas()
         old = next((r for r in rows if r.get("id") == id_salida), None)
-        db.actualizar_salida(id_salida, cambios)
+
+        salida = db.get_salida(id_salida)
+        if not salida:
+            raise ValueError("No se encontro la salida a actualizar.")
+        if str(salida.get("estado", "")).upper() == "ANULADA":
+            raise ValueError("No se puede editar una salida anulada.")
+
+        id_inv_orig = salida["id_inventario"]
+        id_inv_nuevo = cambios.get("id_inventario") or cambios.get("id_entrada") or id_inv_orig
+        cantidad_orig = common.to_float(salida.get("cantidad"))
+        cantidad_nueva = (
+            common.to_float(cambios["cantidad"]) if cambios.get("cantidad") is not None else cantidad_orig
+        )
+
+        disponible_destino = db.get_stock_actual(id_inv_nuevo)
+        if disponible_destino is None:
+            raise ValueError("No se encontro el lote de inventario indicado.")
+        if id_inv_nuevo == id_inv_orig:
+            # La cantidad de la salida original "vuelve" a estar disponible
+            # para efectos de esta validacion (se esta reemplazando, no sumando).
+            disponible_destino += cantidad_orig
+
+        if cantidad_nueva > disponible_destino + common.EPSILON_STOCK:
+            raise ValueError(
+                f"Stock insuficiente en el lote seleccionado. "
+                f"Disponible: {round(disponible_destino, 4)}"
+            )
+
+        # Validacion superada: recien ahora se muta el stock.
+        if id_inv_nuevo == id_inv_orig:
+            db.actualizar_stock(id_inv_orig, max(0.0, disponible_destino - cantidad_nueva))
+        else:
+            stock_orig = db.get_stock_actual(id_inv_orig) or 0
+            db.actualizar_stock(id_inv_orig, stock_orig + cantidad_orig)
+            db.actualizar_stock(id_inv_nuevo, max(0.0, disponible_destino - cantidad_nueva))
+
+        db.actualizar_salida(id_salida, {
+            "id_inventario": id_inv_nuevo,
+            "id_tipo_salida": cambios.get("id_tipo_salida") or salida["id_tipo_salida"],
+            "cantidad": cantidad_nueva,
+            "actividad": cambios.get("actividad"),
+            "observacion": cambios.get("observacion"),
+            "fecha_salida": cambios.get("fecha_salida"),
+            "factura": cambios.get("factura"),
+        })
+
         cambios_log = []
         if old:
             for k in sorted(set(old.keys()) | set(cambios.keys())):
@@ -80,10 +129,25 @@ def actualizar(id_salida, cambios, usuario="SISTEMA"):
         db.close()
 
 
+def anular_con_conexion(db, id_salida):
+    """Anula una salida y restaura el stock, reutilizando una conexion (db)
+    ya abierta por el llamador -- evita abrir una segunda conexion cuando se
+    anula en cascada (ej. desde entradas_mov_logica.anular())."""
+    salida = db.get_salida(id_salida)
+    if not salida or str(salida.get("estado", "")).upper() == "ANULADA":
+        return
+    db.marcar_salida_anulada(id_salida)
+    stock_actual = db.get_stock_actual(salida["id_inventario"])
+    if stock_actual is not None:
+        db.actualizar_stock(
+            salida["id_inventario"], stock_actual + common.to_float(salida.get("cantidad"))
+        )
+
+
 def anular(id_salida, usuario="SISTEMA"):
     db = get_db()
     try:
-        db.anular_salida(id_salida)
+        anular_con_conexion(db, id_salida)
         bit.registrar_campos(
             "SALIDAS-ANULAR",
             id_salida,

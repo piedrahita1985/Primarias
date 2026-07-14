@@ -117,7 +117,10 @@ def firmar_entrega(id_prestamo, id_usuario_entregador, firma_path, usuario_accio
         id_solicitante = int(prestamo.get("id_usuario") or prestamo.get("id_usuario_presta") or 0)
         if id_solicitante and int(id_usuario_entregador or 0) == id_solicitante:
             return False, "El usuario que entrega no puede ser el mismo que realizó la solicitud."
-        db.actualizar_prestamo_entrega(id_prestamo, id_usuario_entregador, firma_path)
+        try:
+            db.actualizar_prestamo_entrega(id_prestamo, id_usuario_entregador, firma_path)
+        except ValueError as e:
+            return False, str(e)
         bit.registrar_campos(
             tipo_operacion="PRESTAMO-ENTREGA",
             id_registro=id_prestamo,

@@ -4,6 +4,7 @@ from tkinter import messagebox, simpledialog, ttk
 from config.config import COLORS
 from logica import movimientos_common as common
 from logica import prestamos_logica as prest
+from logica import usuarios_logica as usr
 from UI._mov_utils import attach_treeview_sorting, apply_default_window, draw_title
 
 
@@ -135,7 +136,7 @@ class RecibidosWindow(tk.Toplevel):
         )
         if ingresada is None:
             return False
-        if str(ingresada).strip() != firma_pass:
+        if not usr.verificar_firma_password(self._user, str(ingresada).strip()):
             messagebox.showerror("Firma", "Contraseña de firma incorrecta.", parent=self)
             return False
         return True

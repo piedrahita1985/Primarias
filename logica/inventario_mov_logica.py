@@ -45,34 +45,31 @@ def construir_inventario():
                 alarma_fv = ""
 
         cant_min = common.to_float(e.get("cantidad_minima"))
-        stock_val = common.to_float(e.get("cantidad_actual", e.get("cantidad", 0)))
+        # cantidad_actual esta en envases (ver "Cantidad (envases)" en el
+        # formulario de entradas); la alarma de minimo sigue comparando envases.
+        stock_envases = common.to_float(e.get("cantidad_actual", e.get("cantidad", 0)))
 
         alarma_stock = ""
         if cant_min > 0:
-            alarma_stock = "BAJO MINIMO" if stock_val < cant_min else "OK"
+            alarma_stock = "BAJO MINIMO" if stock_envases < cant_min else "OK"
 
-        # Calculo de cantidad en envases: parte entera + iniciado si hay fraccion
-        completos = int(stock_val)
-        fraccion = stock_val - completos
-        if fraccion > 0.001:
-            if completos == 0:
-                cantidad_texto = "1 iniciado"
-            elif completos == 1:
-                cantidad_texto = "1 envase y 1 iniciado"
-            else:
-                cantidad_texto = f"{completos} envases y 1 iniciado"
-        elif completos == 0:
-            cantidad_texto = ""
-        elif completos == 1:
-            cantidad_texto = "1 envase"
+        cantidad_texto = common.texto_envases(stock_envases)
+
+        # Stock = cantidad real de producto disponible (envases x contenido
+        # por envase), no el conteo de envases (eso ya lo muestra "cantidad").
+        # No se agrega la unidad aqui: ya existe una columna "Unidad" separada
+        # en Inventario y Stock Analista (ambos consumen este mismo snapshot).
+        presentacion_val = common.to_float(e.get("presentacion"))
+        if presentacion_val > 0:
+            stock_texto = f"{round(stock_envases * presentacion_val, 4):g}"
         else:
-            cantidad_texto = f"{completos} envases"
+            stock_texto = f"{round(stock_envases, 4):g}"
 
         rows.append({
             **e,
             "alarma_fv": alarma_fv,
             "alarma_stock": alarma_stock,
-            "stock": round(stock_val, 4),
+            "stock": stock_texto,
             "cantidad": cantidad_texto,
         })
 

@@ -1,4 +1,4 @@
-from database import get_db
+from database import get_db, EPSILON_STOCK
 
 
 def to_float(value):
@@ -11,6 +11,25 @@ def to_float(value):
 
 def map_by_id(rows):
     return {r["id"]: r for r in rows if "id" in r}
+
+
+def texto_envases(cantidad_envases: float) -> str:
+    """Desglosa una cantidad de envases (parte entera + iniciado) en texto,
+    ej. '5 envases y 1 iniciado'. cantidad_envases ya debe venir en envases
+    (no dividir de nuevo por presentacion)."""
+    completos = int(cantidad_envases)
+    fraccion = cantidad_envases - completos
+    if fraccion > 0.001:
+        if completos == 0:
+            return "1 iniciado"
+        elif completos == 1:
+            return "1 envase y 1 iniciado"
+        return f"{completos} envases y 1 iniciado"
+    if completos == 0:
+        return ""
+    elif completos == 1:
+        return "1 envase"
+    return f"{completos} envases"
 
 
 def map_sustancia_by_codigo(sustancias):

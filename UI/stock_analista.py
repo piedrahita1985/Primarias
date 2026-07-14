@@ -32,31 +32,6 @@ def _safe_float(value) -> float:
         return 0.0
 
 
-def _cantidad_botellas_label(stock: float, presentacion: str) -> str:
-    """Calcula cuántas botellas/envases completos + iniciados hay."""
-    raw = (presentacion or "").strip()
-    if not raw:
-        return ""
-    try:
-        pres = float(raw)
-    except ValueError:
-        return ""
-    if pres <= 0:
-        return ""
-    cantidad = stock / pres
-    enteras = int(cantidad)
-    fraccion = cantidad - enteras
-    if fraccion < 0.001:
-        if enteras == 0:
-            return "0 unidades"
-        elif enteras == 1:
-            return "1 unidad entera"
-        return f"{enteras} unidades enteras"
-    if enteras == 0:
-        return "1 iniciada"
-    return f"{enteras} unidad(es) entera(s) y 1 iniciada"
-
-
 COLUMNS = [
     ("codigo",            "Código",              90),
     ("nombre",            "Nombre",             200),
@@ -211,9 +186,8 @@ class StockAnalistaWindow(tk.Toplevel):
         for row in snapshot:
             if str(row.get("estado", "ACTIVA")).upper() in ("ANULADA", "ANULADO"):
                 continue
-            stock_val = _safe_float(row.get("stock", row.get("cantidad_actual", 0)))
-            pres = str(row.get("presentacion", "")).strip()
-            row["cantidad_botellas"] = _cantidad_botellas_label(stock_val, pres)
+            stock_val = _safe_float(row.get("cantidad_actual", row.get("stock", 0)))
+            row["cantidad_botellas"] = common.texto_envases(stock_val)
             self._all_rows.append(row)
         self._filtered_rows = list(self._all_rows)
         self._current_page = 1
@@ -247,7 +221,7 @@ class StockAnalistaWindow(tk.Toplevel):
         for idx, row in enumerate(page_rows):
             alarma_fv = str(row.get("alarma_fv", "")).upper()
             alarma_stock = str(row.get("alarma_stock", "")).upper()
-            stock_val = _safe_float(row.get("stock", row.get("cantidad_actual", 0)))
+            stock_val = _safe_float(row.get("cantidad_actual", row.get("stock", 0)))
 
             if alarma_fv == "VENCIDO":
                 tag = "vencido"
@@ -368,7 +342,7 @@ class StockAnalistaWindow(tk.Toplevel):
         col_widths = {key: max(len(title), 8) for key, title, _ in COLUMNS}
 
         for row_idx, row in enumerate(rows, start=2):
-            stock_val  = _safe_float(row.get("stock", row.get("cantidad_actual", 0)))
+            stock_val  = _safe_float(row.get("cantidad_actual", row.get("stock", 0)))
             alarma_fv  = str(row.get("alarma_fv", "")).upper()
 
             if alarma_fv == "VENCIDO":
@@ -501,12 +475,10 @@ class StockAnalistaWindow(tk.Toplevel):
         nombre    = inv_row.get("nombre", "")
         lote      = inv_row.get("lote", "")
         unidad    = inv_row.get("unidad", "")
-        pres_str  = str(inv_row.get("presentacion", "")).strip()
         cant_act  = _safe_float(inv_row.get("cantidad_actual", inv_row.get("stock", 0)))
 
         # Cargar y filtrar salidas de este item
-        from logica import movimientos_common as _common
-        all_salidas = _common.cargar_salidas()
+        all_salidas = common.cargar_salidas()
         salidas_item = [
             s for s in all_salidas
             if str(s.get("id_inventario", s.get("id_entrada", ""))) == str(id_inventario)
@@ -530,7 +502,7 @@ class StockAnalistaWindow(tk.Toplevel):
             if not anulada:
                 stock_acum -= qty
             stock_rem = round(stock_acum, 4)
-            cant_bot  = _cantidad_botellas_label(stock_rem, pres_str)
+            cant_bot  = common.texto_envases(stock_rem)
             rows_hist.append({
                 "fecha_hora":       s.get("fecha_hora", ""),
                 "usuario":          s.get("usuario_nombre", ""),
