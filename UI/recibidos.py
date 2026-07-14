@@ -4,6 +4,7 @@ from tkinter import messagebox, simpledialog, ttk
 from config.config import COLORS
 from logica import movimientos_common as common
 from logica import prestamos_logica as prest
+from logica import usuarios_logica as usr
 from UI._mov_utils import attach_treeview_sorting, apply_default_window, draw_title
 
 
@@ -100,10 +101,10 @@ class RecibidosWindow(tk.Toplevel):
         self._button(bar, "Aceptar", COLORS["success"], lambda: self._responder(True)).pack(side="left", padx=(0, 6))
         self._button(bar, "Rechazar", COLORS["error"], lambda: self._responder(False)).pack(side="left", padx=(0, 6))
         self._button(bar, "Registrar devolución", COLORS["primary"], self._devolver).pack(side="left")
-        self._button(bar, "Actualizar", "#6C757D", self._refresh_all).pack(side="right")
 
         bottom = tk.Frame(self, bg=COLORS["secondary"])
         bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+        self._button(bottom, "Actualizar", "#6C757D", self._refresh_all).pack(side="right", padx=(6, 0))
         self._button(bottom, "Salir", "#6C757D", self.destroy).pack(side="right")
 
     def _button(self, parent, text, bg, cmd):
@@ -135,7 +136,7 @@ class RecibidosWindow(tk.Toplevel):
         )
         if ingresada is None:
             return False
-        if str(ingresada).strip() != firma_pass:
+        if not usr.verificar_firma_password(self._user, str(ingresada).strip()):
             messagebox.showerror("Firma", "Contraseña de firma incorrecta.", parent=self)
             return False
         return True

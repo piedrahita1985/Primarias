@@ -1,4 +1,5 @@
 from database import get_db
+import auth
 
 
 def cargar() -> list:
@@ -7,6 +8,22 @@ def cargar() -> list:
         return db.get_usuarios()
     finally:
         db.close()
+
+
+def autenticar(usuario: str, contrasena: str):
+    """Valida credenciales contra la BD (verificacion de hash + migracion
+    perezosa de cuentas legadas). Devuelve el usuario normalizado o None."""
+    db = get_db()
+    try:
+        return db.get_usuario_login(usuario, contrasena)
+    finally:
+        db.close()
+
+
+def verificar_firma_password(user: dict, ingresada: str) -> bool:
+    """Verifica la contrasena de firma de 'user' (ya cargado en memoria)."""
+    firma_pass = (user or {}).get("permisos", {}).get("firma_password", "")
+    return auth.verify_password(ingresada, firma_pass)
 
 
 def agregar(registros: list, datos: dict) -> dict:

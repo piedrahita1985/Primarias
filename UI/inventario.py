@@ -32,6 +32,7 @@ COLUMNS = [
     ("codigo_sistema", "Codigo Sistema", 120),
     ("alarma_stock", "Alarma Stock", 170),
     ("stock", "Stock", 80),
+    ("cantidad", "Cantidad", 160),
 ]
 
 

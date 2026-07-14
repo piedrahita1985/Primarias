@@ -79,7 +79,7 @@ class MenuApp(tk.Toplevel):
 
 		logo_card = tk.Frame(topbar, bg=COLORS["surface_alt"])
 		logo_card.grid(row=0, column=0, padx=(18, 12), pady=10, sticky="w")
-		self._load_image(logo_card, LOGO_IMAGE_PATH, "logo", 150, 38, "CECIF")
+		self._load_image(logo_card, LOGO_IMAGE_PATH, "logo", 150, 38, "CECIF", mode="contain")
 
 		tk.Label(
 			topbar,
@@ -92,31 +92,25 @@ class MenuApp(tk.Toplevel):
 		user_wrap = tk.Frame(topbar, bg=COLORS["surface"])
 		user_wrap.grid(row=0, column=2, padx=(10, 18), pady=10, sticky="e")
 
-		user_card = tk.Frame(user_wrap, bg=COLORS["primary"], bd=0)
-		user_card.pack(side="left", padx=(0, 8))
 		tk.Label(
-    		user_card,
-    		text=f"👤 {self.username}",
-    		bg=COLORS["primary"],
-    		fg="white",
-    		font=("Segoe UI", 10, "bold"),
-    		padx=14,
-    		pady=6,
-		).pack()
+			user_wrap,
+			text=f"Usuario: {self.username}",
+			bg=COLORS["surface"],
+			fg=COLORS["primary_dark"],
+			font=("Segoe UI", 10, "bold"),
+		).pack(side="left", padx=(0, 10))
 
-		tk.Button(
+		self._topbar_button(
 			user_wrap,
 			text="Cerrar sesión",
 			command=self._logout,
-			cursor="hand2",
-		).pack(side="left")
+		).pack(side="left", padx=(0, 6))
 
-		tk.Button(
+		self._topbar_button(
 			user_wrap,
 			text="Salir",
 			command=self._on_close,
-			cursor="hand2",
-		).pack(side="left", padx=(6, 0))
+		).pack(side="left")
 
 		content = tk.Frame(self, bg=COLORS["secondary"])
 		content.grid(row=1, column=0, sticky="nsew")
@@ -170,15 +164,36 @@ class MenuApp(tk.Toplevel):
 		self.mae_card.grid(row=1, column=1, sticky="nsew", padx=(8, 18), pady=(0, 18))
 		self._build_maestras_panel(self.mae_card.body)
 
-	def _load_image(self, container, image_path, key, width, height, fallback_text):
+	def _topbar_button(self, parent, text, command):
+		return tk.Button(
+			parent,
+			text=text,
+			command=command,
+			cursor="hand2",
+			bg=COLORS["primary"],
+			fg="white",
+			activebackground=COLORS["button_hover"],
+			activeforeground="white",
+			relief="flat",
+			bd=0,
+			padx=12,
+			pady=6,
+			font=("Segoe UI", 9, "bold"),
+		)
+
+	def _load_image(self, container, image_path, key, width, height, fallback_text, mode="cover"):
 		try:
 			image = Image.open(image_path)
-			image = ImageOps.fit(
-				image,
-				(max(10, width), max(10, height)),
-				method=Image.LANCZOS,
-				centering=(0.5, 0.5),
-			)
+			target = (max(10, width), max(10, height))
+			if mode == "contain":
+				image = ImageOps.contain(image, target, method=Image.LANCZOS)
+			else:
+				image = ImageOps.fit(
+					image,
+					target,
+					method=Image.LANCZOS,
+					centering=(0.5, 0.5),
+				)
 			photo = ImageTk.PhotoImage(image)
 			self._images[key] = photo
 			tk.Label(container, image=photo, bd=0, bg=container.cget("bg")).pack(fill="both", expand=True)
@@ -291,12 +306,13 @@ class MenuApp(tk.Toplevel):
 		scroll.inner.grid_columnconfigure(1, weight=1)
 
 		actions = [
-			("Entradas", "Registro de ingresos", "entradas", lambda: self._open_master_module("UI.entradas", "entradas")),
-			("Salidas", "Control de despachos", "salidas", lambda: self._open_master_module("UI.salidas", "salidas")),
-			("Inventario", "Stock", "inventario", lambda: self._open_master_module("UI.inventario", "inventario")),
-			("Bitacora", "Auditoria", "bitacora", lambda: self._open_master_module("UI.bitacora", "bitacora")),
-			("Prestamos", "Gestión de préstamos", "prestamos", lambda: self._open_master_module("UI.prestamos", "prestamos")),
-			("Recibidos", "Recepción y devolución", "recibidos", lambda: self._open_master_module("UI.recibidos", "recibidos")),
+			("Entradas", "Registro de ingresos", "log_entradas", lambda: self._open_master_module("UI.entradas", "entradas")),
+			("Salidas", "Control de despachos", "log_salidas", lambda: self._open_master_module("UI.salidas", "salidas")),
+			("Inventario", "Stock", "log_inventario", lambda: self._open_master_module("UI.inventario", "inventario")),
+			("Bitacora", "Auditoria", "log_bitacora", lambda: self._open_master_module("UI.bitacora", "bitacora")),
+			("Prestamos", "Gestión de préstamos", "log_prestamos", lambda: self._open_master_module("UI.prestamos", "prestamos")),
+			("Stock Analista", "Reporte de stock detallado", "", lambda: self._open_master_module("UI.stock_analista", "stock analista")),
+			("Hist. Checklist", "Historial de listas de chequeo", "", lambda: self._open_master_module("UI.hist_checklist", "hist checklist")),
 		]
 
 		for index, (title, subtitle, perm_key, command) in enumerate(actions):
@@ -324,15 +340,15 @@ class MenuApp(tk.Toplevel):
 		scroll.inner.grid_columnconfigure(1, weight=1)
 
 		maestras = [
-			("Sustancias", "UI.sustancias", "sustancias"),
-			("Tipos entrada", "UI.tipos_entrada", "tipos_entrada"),
-			("Tipos salida", "UI.tipos_salida", "tipos_salida"),
-			("Fabricantes", "UI.fabricantes", "fabricantes"),
-			("Unidades", "UI.unidades", "unidades"),
-			("Ubicaciones", "UI.ubicaciones", "ubicaciones"),
-			("Condiciones", "UI.condiciones", "condiciones"),
-			("Colores", "UI.colores", "colores"),
-			("Usuarios", "UI.usuarios", "usuarios"),
+			("Sustancias", "UI.sustancias", "maestra_sustancias"),
+			("Tipos entrada", "UI.tipos_entrada", "maestra_tipos_entrada"),
+			("Tipos salida", "UI.tipos_salida", "maestra_tipos_salida"),
+			("Fabricantes", "UI.fabricantes", "maestra_fabricantes"),
+			("Unidades", "UI.unidades", "maestra_unidades"),
+			("Ubicaciones", "UI.ubicaciones", "maestra_ubicaciones"),
+			("Condiciones", "UI.condiciones", "maestra_condiciones"),
+			("Colores", "UI.colores", "maestra_colores"),
+			("Usuarios", "UI.usuarios", "maestra_usuarios"),
 		]
 
 		for index, (title, module_name, perm_key) in enumerate(maestras):

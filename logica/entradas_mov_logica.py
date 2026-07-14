@@ -1,6 +1,7 @@
 from database import get_db
 from logica import movimientos_common as common
 from logica import bitacora_logica as bit
+from logica import salidas_mov_logica as sal_logica
 
 
 def _normalize_text(value):
@@ -51,23 +52,32 @@ def agregar(record, usuario="SISTEMA"):
         if cantidad_ingreso <= 0:
             raise ValueError("La cantidad de entrada debe ser mayor a cero.")
 
-        # El inventario nace en 0 y el movimiento en tabla 'entradas' actualiza el stock.
+        # El inventario nace en 0 y el movimiento de entrada sube el stock.
         data_inventario = {**record, "cantidad": 0}
         nuevo_id = db.crear_inventario(data_inventario)
 
-        tipo_entrada_id = record.get("id_tipo_entrada")
-        if tipo_entrada_id is not None:
-            id_usuario = _resolver_id_usuario(db, usuario)
-            db.crear_entrada(
-                {
-                    "id_inventario": nuevo_id,
-                    "id_tipo_entrada": tipo_entrada_id,
-                    "cantidad": cantidad_ingreso,
-                    "observacion": record.get("observaciones"),
-                    "certificado": int(bool(record.get("certificado_anl", False))),
-                },
-                id_usuario=id_usuario,
-            )
+        try:
+            tipo_entrada_id = record.get("id_tipo_entrada")
+            if tipo_entrada_id is not None:
+                id_usuario = _resolver_id_usuario(db, usuario)
+                db.crear_entrada(
+                    {
+                        "id_inventario": nuevo_id,
+                        "id_tipo_entrada": tipo_entrada_id,
+                        "cantidad": cantidad_ingreso,
+                        "observacion": record.get("observaciones"),
+                        "certificado": int(bool(record.get("certificado_anl", False))),
+                    },
+                    id_usuario=id_usuario,
+                )
+                db.actualizar_stock(nuevo_id, cantidad_ingreso)
+        except Exception:
+            # Evita dejar inventario activo sin movimiento de entrada asociado.
+            try:
+                db.anular_inventario(nuevo_id)
+            except Exception:
+                pass
+            raise
 
         bit.registrar_campos(
             tipo_operacion="ENTRADAS-CREAR",
@@ -81,13 +91,43 @@ def agregar(record, usuario="SISTEMA"):
 
 
 def actualizar(id_entrada, cambios, usuario="SISTEMA"):
+    """Actualiza una entrada. Si cambia 'cantidad' o 'id_tipo_entrada', ajusta
+    el stock (por delta contra la entrada original) y sincroniza log_entradas
+    -- antes esto se ignoraba en silencio, ver historial de la migracion."""
     cambios = _normalize_record_fields(cambios)
     db = get_db()
     try:
         rows = db.get_inventario()
         old = next((r for r in rows if r.get("id") == id_entrada), None)
         db.actualizar_inventario(id_entrada, cambios)
-        updated = {**(old or {}), **cambios}
+
+        if "cantidad" in cambios or "id_tipo_entrada" in cambios:
+            entrada_orig = db.get_entrada_original(id_entrada)
+            if entrada_orig:
+                nueva_cantidad_mov = None
+                if cambios.get("cantidad") is not None:
+                    nueva_cantidad_mov = common.to_float(cambios["cantidad"])
+                    delta = nueva_cantidad_mov - common.to_float(entrada_orig.get("cantidad"))
+                    if delta != 0:
+                        stock_actual = db.get_stock_actual(id_entrada) or 0
+                        nueva_stock = stock_actual + delta
+                        if nueva_stock < -common.EPSILON_STOCK:
+                            raise ValueError(
+                                "La cantidad editada dejaria el stock en negativo "
+                                "(ya hay salidas o prestamos registrados sobre este lote)."
+                            )
+                        db.actualizar_stock(id_entrada, max(0.0, nueva_stock))
+                certificado = (
+                    int(bool(cambios.get("certificado_anl", False)))
+                    if "certificado_anl" in cambios else None
+                )
+                db.actualizar_movimiento_entrada(
+                    entrada_orig["id"],
+                    cantidad=nueva_cantidad_mov,
+                    id_tipo_entrada=cambios.get("id_tipo_entrada"),
+                    certificado=certificado,
+                )
+
         cambios_log = []
         if old:
             for k in sorted(set(old.keys()) | set(cambios.keys())):
@@ -104,12 +144,13 @@ def anular(id_entrada, usuario="SISTEMA"):
     db = get_db()
     try:
         db.anular_inventario(id_entrada)
-        # Anular salidas asociadas
+        # Anular salidas asociadas (misma conexion, sin duplicar la logica de
+        # restaurar stock: se reutiliza el helper de salidas_mov_logica).
         salidas = db.get_salidas()
         for s in salidas:
             if s.get("id_inventario") == id_entrada or s.get("id_entrada") == id_entrada:
                 if s.get("estado", "ACTIVA") == "ACTIVA":
-                    db.anular_salida(s["id"])
+                    sal_logica.anular_con_conexion(db, s["id"])
         bit.registrar_campos(
             "ENTRADAS-ANULAR",
             id_entrada,

@@ -325,6 +325,7 @@ class SalidasWindow(MovimientosBase):
 
             lote_sel = self._lotes[lote_idx]
             disponible = self._available_for_selected_lote(lote_sel)
+            presentacion = float(lote_sel.get("presentacion") or 1) or 1
 
             if disponible <= 0:
                 self._show_status("No hay stock disponible para el lote seleccionado.", is_error=True)
@@ -357,7 +358,7 @@ class SalidasWindow(MovimientosBase):
                 "id_sustancia": self._current_sustancia.get("id"),
                 "id_entrada": lote_sel.get("id_entrada"),
                 "id_unidad": lote_sel.get("id_unidad"),
-                "cantidad": cantidad,
+                "cantidad": round(cantidad / presentacion, 8),
                 "actividad": self.v_actividad.get().strip(),
                 "observacion": self.txt_obs.get("1.0", "end-1c").strip(),
             }
@@ -374,6 +375,9 @@ class SalidasWindow(MovimientosBase):
             self._refresh_list()
             self._load_history_default()
             self._clear_form()
+        except Exception as e:
+            self._show_status(f"Error al guardar salida: {e}", is_error=True)
+            messagebox.showerror("Error", f"No se pudo guardar la salida.\n\n{e}", parent=self)
         finally:
             self._show_progress(False)
 
@@ -401,7 +405,7 @@ class SalidasWindow(MovimientosBase):
                 r.get("fecha_salida", ""),
                 r.get("codigo", ""),
                 r.get("lote", ""),
-                r.get("cantidad", ""),
+                r.get("cantidad_display", r.get("cantidad", "")),
                 r.get("unidad_nombre", ""),
                 r.get("actividad", ""),
                 r.get("estado", "ACTIVA"),
@@ -417,52 +421,63 @@ class SalidasWindow(MovimientosBase):
         return int(vals[0])
 
     def _edit_selected(self):
-        id_salida = self._selected_history_id()
-        if id_salida is None:
-            messagebox.showwarning("Aviso", "Seleccione una salida del historial.", parent=self)
-            return
+        try:
+            id_salida = self._selected_history_id()
+            if id_salida is None:
+                messagebox.showwarning("Aviso", "Seleccione una salida del historial.", parent=self)
+                return
 
-        rows = sal.cargar()
-        rec = next((r for r in rows if r.get("id") == id_salida), None)
-        if rec is None:
-            return
-        if rec.get("estado") == "ANULADA":
-            messagebox.showwarning("Aviso", "No se puede editar una salida anulada.", parent=self)
-            return
+            rows = sal.cargar()
+            rec = next((r for r in rows if r.get("id") == id_salida), None)
+            if rec is None:
+                return
+            if rec.get("estado") == "ANULADA":
+                messagebox.showwarning("Aviso", "No se puede editar una salida anulada.", parent=self)
+                return
 
-        self._editing_id = id_salida
-        sust = self._sustancias_by_id.get(rec.get("id_sustancia"), {})
-        self.v_codigo.set(str(sust.get("codigo", "")))
-        tipo_salida = self._tipos_salida_by_id.get(rec.get("id_tipo_salida"), {}).get("tipo_salida", "")
-        self.v_tipo_salida.set(tipo_salida or rec.get("tipo_salida", ""))
-        self._set_default_tipo_salida()
-        self._set_date_widget(self.w_fecha, rec.get("fecha_salida", ""))
-        self._fill_sustancia(self.v_codigo.get())
+            self._editing_id = id_salida
+            sust = self._sustancias_by_id.get(rec.get("id_sustancia"), {})
+            codigo = str(sust.get("codigo", ""))
+            if hasattr(self.cb_codigo, "set_by_codigo"):
+                self.cb_codigo.set_by_codigo(codigo)
+            else:
+                self.v_codigo.set(codigo)
 
-        if not any(l.get("id_entrada") == rec.get("id_entrada") for l in self._lotes):
-            entrada = common.map_by_id(common.cargar_entradas()).get(rec.get("id_entrada"), {})
-            self._lotes.append({
-                "id_entrada": rec.get("id_entrada"),
-                "lote": entrada.get("lote", ""),
-                "catalogo": entrada.get("catalogo", ""),
-                "disponible": 0,
-                "id_unidad": rec.get("id_unidad"),
-            })
-            values = [str(l.get("lote", "")) for l in self._lotes]
-            self.cb_lote.configure(values=values)
+            tipo_salida = self._tipos_salida_by_id.get(rec.get("id_tipo_salida"), {}).get("tipo_salida", "")
+            self.v_tipo_salida.set(tipo_salida or rec.get("tipo_salida", ""))
+            self._set_default_tipo_salida()
+            self._set_date_widget(self.w_fecha, rec.get("fecha_salida", ""))
+            self._fill_sustancia(codigo)
 
-        for i, l in enumerate(self._lotes):
-            if l.get("id_entrada") == rec.get("id_entrada"):
-                self.cb_lote.current(i)
-                self._on_lote_selected()
-                break
+            if not any(l.get("id_entrada") == rec.get("id_entrada") for l in self._lotes):
+                entrada = common.map_by_id(common.cargar_entradas()).get(rec.get("id_entrada"), {})
+                self._lotes.append({
+                    "id_entrada": rec.get("id_entrada"),
+                    "lote": entrada.get("lote", ""),
+                    "catalogo": entrada.get("catalogo", ""),
+                    "disponible": 0,
+                    "presentacion": float(entrada.get("presentacion") or 1) or 1,
+                    "id_unidad": rec.get("id_unidad"),
+                })
+                values = [str(l.get("lote", "")) for l in self._lotes]
+                self.cb_lote.configure(values=values)
 
-        self.v_cantidad.set(str(rec.get("cantidad", "")))
-        self.v_actividad.set(rec.get("actividad", ""))
-        self.txt_obs.delete("1.0", "end")
-        self.txt_obs.insert("1.0", rec.get("observacion", ""))
-        self._update_nuevo_stock()
-        self.notebook.select(0)
+            for i, l in enumerate(self._lotes):
+                if l.get("id_entrada") == rec.get("id_entrada"):
+                    self.cb_lote.current(i)
+                    self._on_lote_selected()
+                    _pres = float(l.get("presentacion") or 1) or 1
+                    self.v_cantidad.set(self._fmt_num(float(rec.get("cantidad", 0)) * _pres))
+                    break
+
+            self.v_actividad.set(rec.get("actividad", ""))
+            self.txt_obs.delete("1.0", "end")
+            self.txt_obs.insert("1.0", rec.get("observacion", ""))
+            self._update_nuevo_stock()
+            self.notebook.select(0)
+        except Exception as e:
+            self._show_status(f"Error al cargar salida: {e}", is_error=True)
+            messagebox.showerror("Error", f"No se pudo cargar la salida seleccionada.\n\n{e}", parent=self)
 
     def _cancel_selected(self):
         id_salida = self._selected_history_id()
@@ -617,12 +632,13 @@ class SalidasWindow(MovimientosBase):
         return f"{float(value):.4f}".rstrip("0").rstrip(".") if value else "0"
 
     def _available_for_selected_lote(self, lote):
-        disponible = float(lote.get("disponible", 0))
+        disponible = float(lote.get("disponible", 0))  # ya en gramos
         if self._editing_id is None:
             return disponible
         old = next((r for r in sal.cargar() if r.get("id") == self._editing_id), None)
         if old and old.get("id_entrada") == lote.get("id_entrada") and old.get("estado", "ACTIVA") == "ACTIVA":
-            disponible += float(old.get("cantidad", 0))
+            presentacion = float(lote.get("presentacion") or 1) or 1
+            disponible += float(old.get("cantidad", 0)) * presentacion
         return disponible
 
     def _selected_lote(self):

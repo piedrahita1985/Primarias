@@ -1,10 +1,18 @@
 ﻿import tkinter as tk
-from tkinter import ttk
+from datetime import datetime
+from tkinter import filedialog, messagebox, ttk
 
 from config.config import COLORS
 from logica import bitacora_logica as bit
 from UI._mov_utils import apply_default_window, attach_treeview_sorting, draw_title, get_date_value, make_date_input
 from UI._searchable_treeview import SearchableTreeview
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+    _OPENPYXL = True
+except ImportError:
+    _OPENPYXL = False
 
 
 def open_window(master):
@@ -87,22 +95,20 @@ class BitacoraWindow(tk.Toplevel):
         tbl_frame.grid_rowconfigure(0, weight=1)
         tbl_frame.grid_columnconfigure(0, weight=1)
 
-        cols = ("fecha_hora", "usuario", "operacion", "accion", "id_registro", "campo", "valor_anterior", "valor_nuevo")
+        cols = ("fecha_hora", "usuario", "tipo_operacion", "hoja", "id_registro", "detalle")
         self.tree = SearchableTreeview(
             tbl_frame, columns=cols,
-            search_columns=["usuario", "operacion", "accion", "campo"],
+            search_columns=["usuario", "tipo_operacion", "hoja", "detalle"],
         )
         self.tree.pack(fill="both", expand=True)
 
         for key, title, width in [
-            ("fecha_hora", "Fecha/Hora", 150),
-            ("usuario", "Usuario", 110),
-            ("operacion", "Operacion", 130),
-            ("accion", "Accion", 110),
-            ("id_registro", "ID Registro", 95),
-            ("campo", "Campo", 160),
-            ("valor_anterior", "Valor Anterior", 250),
-            ("valor_nuevo", "Valor Nuevo", 250),
+            ("fecha_hora", "Fecha y Hora", 145),
+            ("usuario", "Usuario", 100),
+            ("tipo_operacion", "Tipo Operacion", 110),
+            ("hoja", "Hoja", 90),
+            ("id_registro", "ID Registro", 80),
+            ("detalle", "Detalle del Cambio", 560),
         ]:
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, anchor="center")
@@ -136,6 +142,7 @@ class BitacoraWindow(tk.Toplevel):
         bottom.pack(fill="x", padx=10, pady=(0, 10))
         self._button(bottom, "Actualizar", COLORS["primary"], self._load_default).pack(side="right", padx=(6, 0))
         self._button(bottom, "Salir", "#6C757D", self.destroy).pack(side="right")
+        self._button(bottom, "📥 Exportar Excel", "#1565C0", self._export_excel).pack(side="left")
 
     def _button(self, parent, text, bg, cmd):
         return tk.Button(parent, text=text, bg=bg, fg="white", font=("Segoe UI", 9, "bold"),
@@ -187,18 +194,57 @@ class BitacoraWindow(tk.Toplevel):
         start = (self._current_page - 1) * self._page_size
         page_rows = self._all_rows[start:start + self._page_size]
         for r in page_rows:
-            operacion, accion = self._split_tipo_operacion(r.get("tipo_operacion", ""))
+            hoja, accion = self._split_tipo_operacion(r.get("tipo_operacion", ""))
             self.tree.insert("", "end", values=(
                 r.get("fecha_hora", ""),
                 r.get("usuario", ""),
-                operacion,
                 accion,
+                hoja,
                 r.get("id_registro", ""),
-                r.get("campo", ""),
-                r.get("valor_anterior", ""),
-                r.get("valor_nuevo", ""),
+                self._build_detalle(r),
             ))
         self._update_pagination_buttons()
+
+    @staticmethod
+    def _build_detalle(row):
+        campo = str(row.get("campo", "") or "").strip()
+        anterior = str(row.get("valor_anterior", "") or "").strip()
+        nuevo = str(row.get("valor_nuevo", "") or "").strip()
+        tipo_op = str(row.get("tipo_operacion", "") or "").strip().upper()
+
+        accion = "operacion"
+        if "-" in tipo_op:
+            _mod, _acc = tipo_op.split("-", 1)
+            accion = _acc.lower()
+        elif tipo_op:
+            accion = tipo_op.lower()
+
+        if campo in {"DETALLE", "REGISTRO"}:
+            if nuevo:
+                return (
+                    f"Se registro la accion de {accion} con el siguiente detalle: {nuevo}"
+                )
+            if anterior:
+                return (
+                    f"Se registro la accion de {accion} con el siguiente detalle: {anterior}"
+                )
+            return f"Se registro la accion de {accion}, pero no se encontraron datos adicionales del cambio."
+
+        if anterior and nuevo:
+            return (
+                f"En la accion de {accion}, el campo '{campo}' fue modificado. "
+                f"Valor anterior: '{anterior}'. Valor nuevo: '{nuevo}'."
+            )
+        if nuevo:
+            return (
+                f"En la accion de {accion}, se establecio el campo '{campo}' "
+                f"con el valor: '{nuevo}'."
+            )
+        if anterior:
+            return (
+                f"En la accion de {accion}, el campo '{campo}' conserva el valor previo: '{anterior}'."
+            )
+        return f"Se registro la accion de {accion}, pero el sistema no reporto cambios especificos en los campos auditados."
 
     def _prev_page(self):
         if self._current_page > 1:
@@ -235,3 +281,131 @@ class BitacoraWindow(tk.Toplevel):
         self.v_tipo_operacion.set("")
         self.v_id_registro.set("")
         self._load_default()
+
+    # ------------------------------------------------------------------
+    # Exportación a Excel
+    # ------------------------------------------------------------------
+
+    def _export_excel(self):
+        if not _OPENPYXL:
+            messagebox.showerror(
+                "Dependencia faltante",
+                "openpyxl no está instalado.\nInstala con: pip install openpyxl",
+                parent=self,
+            )
+            return
+
+        rows = self._all_rows
+        if not rows:
+            messagebox.showwarning("Sin datos", "No hay registros para exportar.", parent=self)
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"bitacora_{timestamp}.xlsx"
+        filepath = filedialog.asksaveasfilename(
+            parent=self,
+            title="Guardar Bitácora",
+            initialfile=default_name,
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx"), ("Todos los archivos", "*.*")],
+        )
+        if not filepath:
+            return
+
+        try:
+            self._write_excel(filepath, rows)
+            messagebox.showinfo("Exportado",
+                                f"Bitácora exportada exitosamente:\n{filepath}", parent=self)
+        except PermissionError:
+            messagebox.showerror(
+                "Error",
+                "No se pudo guardar el archivo. Verifica que no esté abierto en Excel.",
+                parent=self,
+            )
+        except Exception as exc:
+            messagebox.showerror("Error", f"Error al exportar:\n{exc}", parent=self)
+
+    @staticmethod
+    def _write_excel(filepath: str, rows: list) -> None:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Bitácora"
+
+        header_font  = Font(bold=True, color="FFFFFF", size=10)
+        header_fill  = PatternFill("solid", fgColor="0F4C97")
+        header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        center_align = Alignment(horizontal="center", vertical="center")
+        thin = Border(
+            left=Side(style="thin"), right=Side(style="thin"),
+            top=Side(style="thin"),  bottom=Side(style="thin"),
+        )
+
+        headers = [
+            ("fecha_hora",      "Fecha y Hora",          18),
+            ("usuario",         "Usuario",                14),
+            ("tipo_operacion",  "Módulo",                 14),
+            ("accion",          "Acción",                 14),
+            ("id_registro",     "ID Registro",            11),
+            ("detalle",         "Detalle del Cambio",     60),
+        ]
+
+        for col_idx, (_, title, width) in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=title)
+            cell.font  = header_font
+            cell.fill  = header_fill
+            cell.alignment = header_align
+            cell.border = thin
+            ws.column_dimensions[cell.column_letter].width = width
+
+        ws.row_dimensions[1].height = 28
+
+        def _split(tipo_op):
+            text = str(tipo_op or "").strip().upper()
+            if "-" in text:
+                mod, acc = text.split("-", 1)
+                return mod, acc
+            return text, ""
+
+        def _build_detalle(r):
+            campo = str(r.get("campo", "") or "").strip()
+            anterior = str(r.get("valor_anterior", "") or "").strip()
+            nuevo = str(r.get("valor_nuevo", "") or "").strip()
+            tipo_op = str(r.get("tipo_operacion", "") or "").strip().upper()
+            accion = "operacion"
+            if "-" in tipo_op:
+                _, _acc = tipo_op.split("-", 1)
+                accion = _acc.lower()
+            elif tipo_op:
+                accion = tipo_op.lower()
+            if campo in {"DETALLE", "REGISTRO"}:
+                return (nuevo or anterior or f"Se registró la acción de {accion}.")
+            if anterior and nuevo:
+                return f"Campo '{campo}': '{anterior}' → '{nuevo}'"
+            if nuevo:
+                return f"Campo '{campo}' establecido: '{nuevo}'"
+            if anterior:
+                return f"Campo '{campo}' previo: '{anterior}'"
+            return f"Acción: {accion}"
+
+        alt_fill = PatternFill("solid", fgColor="F0F4FC")
+
+        for row_idx, r in enumerate(rows, start=2):
+            mod, acc = _split(r.get("tipo_operacion", ""))
+            values = [
+                r.get("fecha_hora", ""),
+                r.get("usuario", ""),
+                mod,
+                acc,
+                r.get("id_registro", ""),
+                _build_detalle(r),
+            ]
+            fill = alt_fill if row_idx % 2 == 0 else None
+            for col_idx, val in enumerate(values, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                cell.alignment = center_align if col_idx < 6 else Alignment(wrap_text=True)
+                cell.border = thin
+                if fill:
+                    cell.fill = fill
+
+        ws.freeze_panes = "A2"
+        wb.save(filepath)

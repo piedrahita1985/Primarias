@@ -12,10 +12,6 @@ from UI._mov_utils import apply_default_window
 IMAGE_PATH = resource_path("imagenes", "imagenlogin.jpg")
 
 
-def cargar_usuarios():
-	return usr.cargar()
-
-
 class LoginApp(tk.Tk):
 	def __init__(self):
 		super().__init__()
@@ -205,17 +201,7 @@ class LoginApp(tk.Tk):
 			messagebox.showwarning("Campos vacios", "Ingrese usuario y contrasena.")
 			return
 
-		users = cargar_usuarios()
-		valid_user = next(
-			(
-				user
-				for user in users
-				if (user.get("usuario") or user.get("nombre")) == username
-				and (user.get("contrasena") or user.get("contraseña")) == password
-				and user.get("estado", "HABILITADA") == "HABILITADA"
-			),
-			None,
-		)
+		valid_user = usr.autenticar(username, password)
 
 		if not valid_user:
 			messagebox.showerror("Acceso denegado", "Usuario o contrasena incorrectos.")
