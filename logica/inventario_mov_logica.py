@@ -57,13 +57,20 @@ def construir_inventario():
 
         # Stock = cantidad real de producto disponible (envases x contenido
         # por envase), no el conteo de envases (eso ya lo muestra "cantidad").
-        # No se agrega la unidad aqui: ya existe una columna "Unidad" separada
-        # en Inventario y Stock Analista (ambos consumen este mismo snapshot).
-        presentacion_val = common.to_float(e.get("presentacion"))
-        if presentacion_val > 0:
-            stock_texto = f"{round(stock_envases * presentacion_val, 4):g}"
+        # Se lee de la columna persistida log_inventario.stock (mantenida al
+        # dia por actualizar_stock/actualizar_inventario) en vez de
+        # recalcularla aqui; solo se recalcula como respaldo si por alguna
+        # razon vino vacia. No se agrega la unidad al texto: ya existe una
+        # columna "Unidad" separada en Inventario y Stock Analista.
+        stock_col = e.get("stock")
+        if stock_col is not None:
+            stock_texto = f"{round(common.to_float(stock_col), 4):g}"
         else:
-            stock_texto = f"{round(stock_envases, 4):g}"
+            presentacion_val = common.to_float(e.get("presentacion"))
+            if presentacion_val > 0:
+                stock_texto = f"{round(stock_envases * presentacion_val, 4):g}"
+            else:
+                stock_texto = f"{round(stock_envases, 4):g}"
 
         rows.append({
             **e,

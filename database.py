@@ -226,10 +226,24 @@ def _migrar_schema(conn):
         ("observaciones",    "TEXT"),
         ("costo_unitario",   "REAL"),
         ("costo_total",      "REAL"),
+        ("stock",            "REAL"),
     ]
+    stock_es_nueva = not _col_existe(conn, "log_inventario", "stock")
     for col, tipo in extra_inventario:
         if not _col_existe(conn, "log_inventario", col):
             conn.execute(f"ALTER TABLE log_inventario ADD COLUMN {col} {tipo}")
+
+    if stock_es_nueva:
+        # Backfill: stock = cantidad_actual (envases) x presentacion (contenido
+        # por envase) -- el valor legible de "cuanto producto hay realmente".
+        for row in conn.execute("SELECT id, cantidad_actual, presentacion FROM log_inventario").fetchall():
+            id_inv, cantidad_actual, presentacion = row
+            try:
+                pres = float(presentacion) if presentacion not in (None, "") else 0
+            except (TypeError, ValueError):
+                pres = 0
+            stock = (cantidad_actual or 0) * pres if pres > 0 else (cantidad_actual or 0)
+            conn.execute("UPDATE log_inventario SET stock=? WHERE id=?", (stock, id_inv))
 
     # ── 2.1 Permitir estado ANULADO en inventario (reconstrucción idempotente)
     if not _inventario_permite_anulado(conn):
@@ -255,7 +269,10 @@ def _migrar_schema(conn):
                 factura_compra    INTEGER NOT NULL DEFAULT 0,
                 fecha_entrada     TEXT,
                 factura           TEXT,
-                observaciones     TEXT
+                observaciones     TEXT,
+                costo_unitario    REAL,
+                costo_total       REAL,
+                stock             REAL
             )
         """)
         conn.execute("""
@@ -265,13 +282,15 @@ def _migrar_schema(conn):
                  cantidad_actual, estado,
                  potencia, catalogo, presentacion,
                  certificado_anl, ficha_seguridad, factura_compra,
-                 fecha_entrada, factura, observaciones)
+                 fecha_entrada, factura, observaciones,
+                 costo_unitario, costo_total, stock)
             SELECT id, id_sustancia, id_ubicacion, id_fabricante, id_unidad,
                    id_condicion, id_color, lote, fecha_vencimiento,
                    cantidad_actual, estado,
                    potencia, catalogo, presentacion,
                    certificado_anl, ficha_seguridad, factura_compra,
-                   fecha_entrada, factura, observaciones
+                   fecha_entrada, factura, observaciones,
+                   costo_unitario, costo_total, stock
               FROM log_inventario
         """)
         conn.execute("DROP TABLE log_inventario")
@@ -525,6 +544,7 @@ def _migrar_schema_hibrido(conn, motor: str) -> None:
         ("observaciones",   "NVARCHAR(MAX)",          None),
         ("costo_unitario",  "FLOAT",                  None),
         ("costo_total",     "FLOAT",                  None),
+        ("stock",           "FLOAT",                  None),
     ]
     for col, tipo, default in extra_inventario:
         if not _col_existe_universal(conn, motor, "log_inventario", col):
@@ -770,6 +790,7 @@ def _crear_tablas_sqlserver(conn) -> None:
             observaciones NVARCHAR(MAX),
             costo_unitario FLOAT,
             costo_total FLOAT,
+            stock FLOAT,
             FOREIGN KEY (id_sustancia) REFERENCES maestra_sustancias(id)
         )
     """)
@@ -1006,7 +1027,8 @@ def _crear_tablas_si_no_existen(conn, motor="sqlite"):
             factura TEXT,
             observaciones TEXT,
             costo_unitario REAL,
-            costo_total REAL
+            costo_total REAL,
+            stock REAL
         );
 
         CREATE TABLE IF NOT EXISTS log_entradas (
@@ -1887,6 +1909,23 @@ class KardexDB:
                 id_inv,
             ),
         )
+
+        # La presentacion pudo haber cambiado: recalcular la columna 'stock'
+        # legible (cantidad_actual x presentacion) para que no quede
+        # desactualizada respecto al nuevo contenido por envase.
+        if "presentacion" in datos:
+            fila = self._fetchone(
+                f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}", (id_inv,)
+            )
+            cantidad_actual = float((fila or {}).get("cantidad_actual") or 0)
+            try:
+                pres = float(datos.get("presentacion") or 0)
+            except (TypeError, ValueError):
+                pres = 0
+            nuevo_stock = cantidad_actual * pres if pres > 0 else cantidad_actual
+            self._execute(
+                f"UPDATE log_inventario SET stock={ph} WHERE id={ph}", (nuevo_stock, id_inv)
+            )
         self.commit()
 
     def get_entrada_original(self, id_inventario: int) -> Optional[dict]:
@@ -1934,24 +1973,30 @@ class KardexDB:
         return float(row.get("cantidad_actual") or 0)
 
     def actualizar_stock(self, id_inventario: int, nueva_cantidad: float):
-        """Actualiza cantidad_actual y deriva ACTIVO/AGOTADO segun corresponda.
-        Un lote ya ANULADO no se "revive": solo se ajusta cantidad_actual, sin
+        """Actualiza cantidad_actual (y la columna 'stock' legible = envases x
+        presentacion) y deriva ACTIVO/AGOTADO segun corresponda. Un lote ya
+        ANULADO no se "revive": solo se ajusta cantidad_actual/stock, sin
         tocar su estado (ej. al restaurar stock de una salida anulada en
         cascada junto con la entrada que la origino)."""
         ph = self._ph()
         actual = self._fetchone(
-            f"SELECT estado FROM log_inventario WHERE id={ph}", (id_inventario,)
+            f"SELECT estado, presentacion FROM log_inventario WHERE id={ph}", (id_inventario,)
         )
+        try:
+            pres = float((actual or {}).get("presentacion") or 0)
+        except (TypeError, ValueError):
+            pres = 0
+        stock = nueva_cantidad * pres if pres > 0 else nueva_cantidad
         if str((actual or {}).get("estado") or "").upper() == "ANULADO":
             self._execute(
-                f"UPDATE log_inventario SET cantidad_actual={ph} WHERE id={ph}",
-                (nueva_cantidad, id_inventario),
+                f"UPDATE log_inventario SET cantidad_actual={ph}, stock={ph} WHERE id={ph}",
+                (nueva_cantidad, stock, id_inventario),
             )
         else:
             estado = "AGOTADO" if nueva_cantidad <= 0 else "ACTIVO"
             self._execute(
-                f"UPDATE log_inventario SET cantidad_actual={ph}, estado={ph} WHERE id={ph}",
-                (nueva_cantidad, estado, id_inventario),
+                f"UPDATE log_inventario SET cantidad_actual={ph}, stock={ph}, estado={ph} WHERE id={ph}",
+                (nueva_cantidad, stock, estado, id_inventario),
             )
         self.commit()
 
