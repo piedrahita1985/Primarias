@@ -7,6 +7,7 @@ __pycache__/
 
 # Base de datos (runtime)
 data/*.db
+!data/kardex.db
 data/*.bak
 data/*.db-shm
 data/*.db-wal
