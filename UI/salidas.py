@@ -13,6 +13,7 @@ from UI._mov_utils import (
     make_date_input,
     make_date_widget,
     make_labeled_entry,
+    make_required_label,
     only_numeric,
     upper_text_var,
     validate_required_fields,
@@ -125,18 +126,45 @@ class SalidasWindow(MovimientosBase):
         form.bind("<Configure>", _on_form_config)
         canvas.bind("<Configure>", _on_canvas_config)
 
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # bind_all("<MouseWheel>") es global a la app: si se deja atado todo
+        # el tiempo (como antes) y esta ventana se cierra, el callback sigue
+        # vivo apuntando a un canvas ya destruido y la primera vez que alguien
+        # mueva la rueda en cualquier otra ventana revienta con TclError en
+        # silencio. Solo se activa mientras el mouse esta sobre este canvas,
+        # y se suelta al cerrar la ventana.
+        self._registro_canvas = canvas
+        self._wheel_active = False
+        canvas.bind("<Enter>", self._activate_wheel)
+        canvas.bind("<Leave>", self._deactivate_wheel)
+        self.bind("<Destroy>", self._on_wheel_destroy, add="+")
         self._build_form_fields(form)
+
+    def _on_mousewheel(self, event):
+        self._registro_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _activate_wheel(self, _event=None):
+        if self._wheel_active:
+            return
+        self.bind_all("<MouseWheel>", self._on_mousewheel)
+        self._wheel_active = True
+
+    def _deactivate_wheel(self, _event=None):
+        if not self._wheel_active:
+            return
+        self.unbind_all("<MouseWheel>")
+        self._wheel_active = False
+
+    def _on_wheel_destroy(self, _event=None):
+        try:
+            self._deactivate_wheel()
+        except Exception:
+            pass
 
     def _build_form_fields(self, parent):
         for c in range(5):
             parent.grid_columnconfigure(c, weight=1)
 
-        tk.Label(parent, text="Tipo Salida", bg=COLORS["secondary"], fg=COLORS["text_dark"],
-                 font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", padx=8, pady=(10, 2))
+        make_required_label(parent, "Tipo Salida", 0, 0)
         self.cb_tipo_salida = ttk.Combobox(
             parent, textvariable=self.v_tipo_salida, values=self._tipos_salida,
             state="readonly", font=("Segoe UI", 10))
@@ -144,8 +172,7 @@ class SalidasWindow(MovimientosBase):
 
         self.w_fecha = make_date_input(parent, 0, 1, "Fecha")
 
-        tk.Label(parent, text="Codigo de Uso", bg=COLORS["secondary"], fg=COLORS["text_dark"],
-                 font=("Segoe UI", 9, "bold")).grid(row=0, column=2, sticky="w", padx=8, pady=(10, 2))
+        make_required_label(parent, "Codigo de Uso", 0, 2)
         self.cb_codigo = SmartCodeCombobox(parent, self._sustancias_by_codigo, state="normal", font=("Segoe UI", 10))
         self.cb_codigo.grid(row=1, column=2, sticky="ew", padx=8, pady=(0, 8))
         self.cb_codigo.bind("<<SmartCodeSelected>>", self._on_codigo_selected)
@@ -156,8 +183,7 @@ class SalidasWindow(MovimientosBase):
 
         make_labeled_entry(parent, "Codigo Sistema", self.v_codigo_sistema, 2, 0, read_only=True)
 
-        tk.Label(parent, text="Lote", bg=COLORS["secondary"], fg=COLORS["text_dark"],
-                 font=("Segoe UI", 9, "bold")).grid(row=2, column=1, sticky="w", padx=8, pady=(6, 2))
+        make_required_label(parent, "Lote", 2, 1)
         self.cb_lote = ttk.Combobox(parent, textvariable=self.v_lote, values=[],
                                     state="readonly", font=("Segoe UI", 10))
         self.cb_lote.grid(row=3, column=1, sticky="ew", padx=8, pady=(0, 8))
@@ -168,7 +194,7 @@ class SalidasWindow(MovimientosBase):
         self.e_nuevo_stock = make_labeled_entry(parent, "Nuevo stock", self.v_nuevo_stock, 2, 4, read_only=True)
         self._paint_nuevo_stock(None)
 
-        e_cantidad = make_labeled_entry(parent, "Cantidad a retirar", self.v_cantidad, 4, 0)
+        self._e_cantidad = e_cantidad = make_labeled_entry(parent, "Cantidad a retirar", self.v_cantidad, 4, 0, required=True)
         e_cantidad.bind("<KeyPress>", only_numeric)
         make_labeled_entry(parent, "Actividad", self.v_actividad, 4, 1)
 
@@ -300,6 +326,16 @@ class SalidasWindow(MovimientosBase):
 
     def _do_save(self):
         try:
+            campos_obligatorios = {
+                "Tipo Salida": (self.cb_tipo_salida, self.v_tipo_salida.get().strip()),
+                "Codigo de Uso": (self.cb_codigo, self.cb_codigo.get_codigo().strip() if hasattr(self.cb_codigo, "get_codigo") else ""),
+                "Lote": (self.cb_lote, self.v_lote.get().strip()),
+                "Cantidad a retirar": (self._e_cantidad, self.v_cantidad.get().strip()),
+            }
+            ok, _faltantes = validate_required_fields(campos_obligatorios, parent=self)
+            if not ok:
+                return
+
             if self._current_sustancia is None:
                 self._show_status("Seleccione un codigo de uso valido.", is_error=True)
                 messagebox.showwarning("Aviso", "Seleccione un codigo de uso valido.", parent=self)
@@ -486,7 +522,11 @@ class SalidasWindow(MovimientosBase):
             return
         if not messagebox.askyesno("Confirmar", "Anular la salida seleccionada?", parent=self):
             return
-        sal.anular(id_salida, usuario=self.username)
+        try:
+            sal.anular(id_salida, usuario=self.username)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo anular la salida.\n\n{e}", parent=self)
+            return
         self._show_status("Salida anulada.", is_success=True)
         self._refresh_list()
         self._load_history_default()

@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from database import get_db
+from database import get_db, EPSILON_STOCK
 from logica import movimientos_common as common
 
 
@@ -11,7 +11,7 @@ def sugerir_unidad_id(id_sustancia):
     finally:
         db.close()
     for e in sorted(rows, key=lambda x: x.get("id", 0), reverse=True):
-        if e.get("estado", "ACTIVA") != "ACTIVA":
+        if str(e.get("estado", "ACTIVA")).upper() == "ANULADA":
             continue
         if e.get("id_sustancia") == id_sustancia and e.get("id_unidad"):
             return e.get("id_unidad")
@@ -27,7 +27,19 @@ def construir_inventario():
 
     rows = []
     for e in entradas:
-        if e.get("estado", "ACTIVA") != "ACTIVA":
+        # db.get_inventario() solo traduce ACTIVO->ACTIVA y ANULADO->ANULADA
+        # (compatibilidad con el esquema JSON legado); AGOTADO/VENCIDO llegan
+        # tal cual. Comparar contra "== ACTIVA" en vez de "!= ANULADA" ocultaba
+        # por accidente cualquier lote AGOTADO o VENCIDO de este listado.
+        if str(e.get("estado", "ACTIVA")).upper() == "ANULADA":
+            continue
+
+        stock_envases = common.to_float(e.get("cantidad_actual", e.get("cantidad", 0)))
+        # Un lote sin existencia real (agotado, o con un valor negativo de
+        # origen) no debe listarse en el inventario: la sustancia sigue
+        # disponible en su maestra para futuras entradas, pero este renglon
+        # de stock no representa nada fisico que mostrar.
+        if stock_envases <= EPSILON_STOCK:
             continue
 
         fecha_v = str(e.get("fecha_vencimiento", "")).strip()
@@ -47,8 +59,6 @@ def construir_inventario():
         cant_min = common.to_float(e.get("cantidad_minima"))
         # cantidad_actual esta en envases (ver "Cantidad (envases)" en el
         # formulario de entradas); la alarma de minimo sigue comparando envases.
-        stock_envases = common.to_float(e.get("cantidad_actual", e.get("cantidad", 0)))
-
         alarma_stock = ""
         if cant_min > 0:
             alarma_stock = "BAJO MINIMO" if stock_envases < cant_min else "OK"

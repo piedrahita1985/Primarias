@@ -286,7 +286,7 @@ class MenuApp(tk.Toplevel):
 		return bool(self.permisos.get(key, False))
 	
 	def _show_pending_feature(self, title):
-		messagebox.showinfo("Proximamente", f"{title} se habilitara en la siguiente etapa.")
+		messagebox.showinfo("Proximamente", f"{title} se habilitara en la siguiente etapa.", parent=self)
 
 	def _build_movimientos_panel(self, panel):
 		panel.grid_rowconfigure(1, weight=1)
@@ -370,9 +370,9 @@ class MenuApp(tk.Toplevel):
 			if hasattr(module, "open_window"):
 				module.open_window(self)
 				return
-			messagebox.showinfo("Modulo", f"Archivo {title}.py encontrado, aun sin implementacion.")
+			messagebox.showinfo("Modulo", f"Archivo {title}.py encontrado, aun sin implementacion.", parent=self)
 		except Exception as exc:
-			messagebox.showerror("Error", f"No fue posible abrir {title}.py\n\n{exc}")
+			messagebox.showerror("Error", f"No fue posible abrir {title}.py\n\n{exc}", parent=self)
 
 	def _on_close(self):
 		self.logout_requested = False

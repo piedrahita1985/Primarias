@@ -1,3 +1,5 @@
+import logging
+import traceback
 import tkinter as tk
 from tkinter import messagebox
 from tkinter import ttk
@@ -28,6 +30,28 @@ class LoginApp(tk.Tk):
 
 		apply_default_window(self, width=WINDOW_WIDTH, height=WINDOW_HEIGHT, min_width=1040, min_height=640)
 		self._build_ui()
+
+	def report_callback_exception(self, exc, val, tb):
+		"""Manejador global de excepciones de Tk. Sin esto, cualquier error que
+		ocurra dentro de un callback (click de boton, atajo, etc.) que no este
+		envuelto en su propio try/except desaparece en silencio: no hay consola
+		en el build congelado y Tk por defecto solo lo imprime a stderr. Esto
+		aplica a TODA la app (login, menu y cada ventana Toplevel abierta desde
+		aqui), porque Tk enruta las excepciones no capturadas hacia el metodo
+		report_callback_exception de la ventana raiz."""
+		logging.getLogger(__name__).error(
+			"Error no controlado en la interfaz", exc_info=(exc, val, tb)
+		)
+		detalle = "".join(traceback.format_exception_only(exc, val)).strip()
+		try:
+			messagebox.showerror(
+				"Error inesperado",
+				"Ocurrio un error inesperado y la operacion no se completo.\n"
+				"Si el problema persiste, contacte al administrador.\n\n"
+				f"Detalle tecnico: {detalle}",
+			)
+		except Exception:
+			pass
 
 	def _build_ui(self):
 		self.grid_rowconfigure(0, weight=1)

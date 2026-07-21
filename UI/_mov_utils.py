@@ -107,14 +107,17 @@ def apply_default_window(window, width=WINDOW_WIDTH, height=WINDOW_HEIGHT, min_w
     window.resizable(True, True)
 
 
-def make_labeled_entry(parent, label, var, row, col, width=22, read_only=False):
-    tk.Label(
-        parent,
-        text=label,
-        bg=COLORS["secondary"],
-        fg=COLORS["text_dark"],
-        font=("Segoe UI", 9, "bold"),
-    ).grid(row=row, column=col, sticky="w", padx=8, pady=(6, 2))
+def make_labeled_entry(parent, label, var, row, col, width=22, read_only=False, required=False):
+    if required:
+        make_required_label(parent, label, row, col)
+    else:
+        tk.Label(
+            parent,
+            text=label,
+            bg=COLORS["secondary"],
+            fg=COLORS["text_dark"],
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=row, column=col, sticky="w", padx=8, pady=(6, 2))
 
     state = "readonly" if read_only else "normal"
     entry = tk.Entry(

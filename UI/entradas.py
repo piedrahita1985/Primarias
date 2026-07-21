@@ -11,9 +11,11 @@ from UI._mov_utils import (
     attach_treeview_sorting,
     draw_title,
     get_date_value,
+    highlight_required_field,
     make_date_input,
     make_date_widget,
     make_labeled_entry,
+    make_required_label,
     only_numeric,
     upper_text_var,
     validate_required_fields,
@@ -325,20 +327,23 @@ class EntradasWindow(MovimientosBase):
 
         self.w_fecha_entrada = make_date_input(sec1, 0, 0, "Fecha Ingreso", allow_past=True, empty_default=True)
 
-        tk.Label(sec1, text="Tipo Entrada", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=1, sticky="w", padx=8, pady=(6, 2))
+        make_required_label(sec1, "Tipo Entrada", 0, 1)
         self.cb_tipo_entrada = ttk.Combobox(sec1, textvariable=self.v_tipo_entrada, values=self._tipos_entrada, state="readonly", font=("Segoe UI", 10))
         self.cb_tipo_entrada.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 8))
 
-        tk.Label(sec1, text="Codigo de Uso", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=2, sticky="w", padx=8, pady=(6, 2))
+        make_required_label(sec1, "Codigo de Uso", 0, 2)
         self.cb_codigo = SmartCodeCombobox(sec1, self._sustancias_by_codigo, state="normal", font=("Segoe UI", 10))
         self.cb_codigo.grid(row=1, column=2, sticky="ew", padx=8, pady=(0, 8))
         self.cb_codigo.bind("<<SmartCodeSelected>>", self._on_codigo_selected)
         self.cb_codigo.bind("<FocusOut>", self._on_codigo_focusout)
 
-        tk.Label(sec1, text="Lote", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=3, sticky="w", padx=8, pady=(6, 2))
+        if self._lote_opcional:
+            tk.Label(sec1, text="Lote", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=3, sticky="w", padx=8, pady=(6, 2))
+        else:
+            make_required_label(sec1, "Lote", 0, 3)
         self.cb_lote = ttk.Combobox(sec1, textvariable=self.v_lote, values=[], state="normal", font=("Segoe UI", 10))
         self.cb_lote.grid(row=1, column=3, sticky="ew", padx=8, pady=(0, 8))
-        make_labeled_entry(sec1, "Catalogo", self.v_catalogo, 2, 3, width=18)
+        self._e_catalogo = make_labeled_entry(sec1, "Catalogo", self.v_catalogo, 2, 3, width=18, required=True)
 
         make_labeled_entry(sec1, "Nombre del Producto", self.v_nombre, 2, 0, read_only=True)
         make_labeled_entry(sec1, "Propiedad", self.v_propiedad, 2, 1, read_only=True)
@@ -365,11 +370,11 @@ class EntradasWindow(MovimientosBase):
         for c in range(5):
             sec2.grid_columnconfigure(c, weight=1)
 
-        e_cantidad = make_labeled_entry(sec2, "Cantidad (envases)", self.v_cantidad, 0, 0)
-        e_present = make_labeled_entry(sec2, "Contenido por envase", self.v_contenido_por_unidad, 0, 1)
+        self._e_cantidad = e_cantidad = make_labeled_entry(sec2, "Cantidad (envases)", self.v_cantidad, 0, 0, required=True)
+        self._e_present = e_present = make_labeled_entry(sec2, "Contenido por envase", self.v_contenido_por_unidad, 0, 1, required=True)
         make_labeled_entry(sec2, "Contenido total (auto)", self.v_contenido_total, 0, 2, read_only=True)
 
-        tk.Label(sec2, text="Unidad", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=3, sticky="w", padx=8, pady=(6, 2))
+        make_required_label(sec2, "Unidad", 0, 3)
         self.cb_unidad = ttk.Combobox(sec2, textvariable=self.v_unidad, values=[u.get("unidad", "") for u in self._maestras["unidades"] if u.get("unidad")], state="readonly", font=("Segoe UI", 10))
         self.cb_unidad.grid(row=1, column=3, sticky="ew", padx=8, pady=(0, 8))
 
@@ -404,13 +409,13 @@ class EntradasWindow(MovimientosBase):
         self.cb_factura_compra = tk.Checkbutton(sec4, text="Factura de compra", variable=self.v_factura_compra, bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 10), state="disabled")
         self.cb_factura_compra.grid(row=0, column=2, sticky="w", padx=8, pady=(6, 2))
 
-        self.w_fecha_venc = make_date_input(sec4, 1, 0, "Fecha Vencimiento", allow_past=False, empty_default=True)
+        self.w_fecha_venc = make_date_input(sec4, 1, 0, "Fecha Vencimiento", allow_past=False, empty_default=True, required=True)
 
         sec5 = self._section(parent, "Almacenamiento y Observaciones")
         for c in range(4):
             sec5.grid_columnconfigure(c, weight=1)
 
-        tk.Label(sec5, text="Ubicación", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", padx=8, pady=(6, 2))
+        make_required_label(sec5, "Ubicación", 0, 0)
         self._ubicaciones_rows = list(self._maestras["ubicaciones"])
         self._ubicacion_tipos = sorted({str(u.get("ubicacion", "")).strip() for u in self._ubicaciones_rows if str(u.get("ubicacion", "")).strip()})
         self._caja_values = []
@@ -424,7 +429,7 @@ class EntradasWindow(MovimientosBase):
         self.cb_ubicacion_tipo.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.cb_ubicacion_tipo.bind("<<ComboboxSelected>>", self._on_ubicacion_tipo_selected)
 
-        tk.Label(sec5, text="No. Caja", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 9, "bold")).grid(row=0, column=1, sticky="w", padx=8, pady=(6, 2))
+        make_required_label(sec5, "No. Caja", 0, 1)
         self.cb_no_caja = ttk.Combobox(
             sec5,
             textvariable=self.v_no_caja,
@@ -555,14 +560,33 @@ class EntradasWindow(MovimientosBase):
 
     def _format_costo_unitario(self, _event=None):
         """Formatea el costo unitario con símbolo $ y separadores."""
+        valor_raw = self.v_costo_unitario.get().replace("$", "").replace(",", "").strip()
+        if not valor_raw:
+            return
         try:
-            valor_raw = self.v_costo_unitario.get().replace("$", "").replace(",", "").strip()
-            if not valor_raw:
-                return
             valor = float(valor_raw)
-            self.v_costo_unitario.set(f"${valor:,.2f}")
         except ValueError:
-            pass
+            # Antes se ignoraba en silencio (except: pass) y el texto invalido
+            # sobrevivia hasta el float() de _save(), donde aparecia como un
+            # traceback crudo de Python. Se avisa aqui, al momento del error.
+            messagebox.showwarning(
+                "Costo Unitario",
+                f"'{valor_raw}' no es un valor numerico valido. Se limpia el campo.",
+                parent=self,
+            )
+            self.v_costo_unitario.set("")
+            return
+        self.v_costo_unitario.set(f"${valor:,.2f}")
+
+    @staticmethod
+    def _parse_costo(texto: str, campo: str) -> float:
+        crudo = (texto or "0").replace("$", "").replace(",", "").strip()
+        if not crudo:
+            return 0.0
+        try:
+            return float(crudo)
+        except ValueError:
+            raise ValueError(f"El campo '{campo}' tiene un valor no numerico: '{texto}'.")
 
     def _update_factura_compra_state(self):
         """Habilita/deshabilita el checkbox 'Factura de compra' si hay contenido en 'Factura/OC'."""
@@ -773,21 +797,30 @@ class EntradasWindow(MovimientosBase):
     def _do_save(self):
         try:
             codigo = self.cb_codigo.get_codigo().strip() if hasattr(self.cb_codigo, 'get_codigo') else self.v_codigo.get().strip()
-            sustancia = self._sustancias_by_codigo.get(codigo)
-            if sustancia is None:
-                self._warn("Seleccione un codigo de uso valido.")
-                return
-
             lote = self.v_lote.get().strip()
             catalogo = self.v_catalogo.get().strip()
             cantidad_txt = self.v_cantidad.get().strip()
 
-            if not catalogo or not cantidad_txt:
-                self._warn("Catalogo y cantidad son obligatorios.")
+            campos_obligatorios = {
+                "Tipo Entrada": (self.cb_tipo_entrada, self.v_tipo_entrada.get().strip()),
+                "Codigo de Uso": (self.cb_codigo, codigo),
+                "Catalogo": (self._e_catalogo, catalogo),
+                "Cantidad (envases)": (self._e_cantidad, cantidad_txt),
+                "Contenido por envase": (self._e_present, self.v_contenido_por_unidad.get().strip()),
+                "Unidad": (self.cb_unidad, self.v_unidad.get().strip()),
+                "Ubicación": (self.cb_ubicacion_tipo, self.v_ubicacion_tipo.get().strip()),
+                "No. Caja": (self.cb_no_caja, self.v_no_caja.get().strip()),
+            }
+            if not self._lote_opcional:
+                campos_obligatorios["Lote"] = (self.cb_lote, lote)
+
+            ok, _faltantes = validate_required_fields(campos_obligatorios, parent=self)
+            if not ok:
                 return
 
-            if not self._lote_opcional and not lote:
-                self._warn("Lote, catalogo y cantidad son obligatorios.")
+            sustancia = self._sustancias_by_codigo.get(codigo)
+            if sustancia is None:
+                self._warn("Seleccione un codigo de uso valido.")
                 return
 
             try:
@@ -866,8 +899,8 @@ class EntradasWindow(MovimientosBase):
                 "total_contenido": cantidad * presentacion,
                 "id_unidad": unidad_id,
                 "potencia": self.v_potencia.get().strip(),
-                "costo_unitario": float((self.v_costo_unitario.get() or "0").replace("$", "").replace(",", "")),
-                "costo_total": float((self.v_costo_total.get() or "0").replace("$", "").replace(",", "")),
+                "costo_unitario": self._parse_costo(self.v_costo_unitario.get(), "Costo Unitario"),
+                "costo_total": self._parse_costo(self.v_costo_total.get(), "Costo Total"),
                 "factura": self.v_factura.get().strip(),
                 "certificado_anl": self.v_cert_anl.get(),
                 "ficha_seguridad": self.v_ficha_seg.get(),
@@ -897,7 +930,7 @@ class EntradasWindow(MovimientosBase):
             self._clear_form()
         except Exception as e:
             self._show_status(f"Error: {e}", is_error=True)
-            messagebox.showerror("Error", str(e), parent=self)
+            messagebox.showerror("Error", f"No se pudo guardar la entrada.\n\n{e}", parent=self)
         finally:
             self._show_progress(False)
 
@@ -1139,7 +1172,11 @@ class EntradasWindow(MovimientosBase):
         if not messagebox.askyesno("Confirmar", "¿Anular la entrada seleccionada?", parent=self):
             return
 
-        ent.anular(id_entrada, usuario=self.username)
+        try:
+            ent.anular(id_entrada, usuario=self.username)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo anular la entrada.\n\n{e}", parent=self)
+            return
         self._show_status("Entrada anulada.", is_success=True)
         self._refresh_list()
         self._load_history_default()

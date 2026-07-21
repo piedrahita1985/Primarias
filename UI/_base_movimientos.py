@@ -33,12 +33,36 @@ class MovimientosBase(tk.Toplevel):
     # ------------------------------------------------------------------
     # Atajos de teclado
     # ------------------------------------------------------------------
+    _SHORTCUT_SEQS = ("<Control-g>", "<Control-G>", "<F5>", "<Escape>")
+
     def _build_shortcuts(self):
-        """Configura atajos de teclado globales para la ventana."""
+        """Configura atajos de teclado para la ventana.
+
+        bind_all() ata la secuencia a nivel de aplicacion (necesario para que
+        Ctrl+G/F5/Esc funcionen sin importar que Entry tenga el foco), pero es
+        un recurso global de un solo dueno: si dos ventanas de movimientos
+        (Entradas y Salidas) estan abiertas a la vez, la ultima en llamar
+        bind_all "roba" el atajo, y si esa ventana se cierra sin desvincular,
+        el atajo queda apuntando a widgets ya destruidos (TclError silenciosa
+        al pulsarlo desde la otra ventana). Se reclama en <FocusIn> (para que
+        la ventana activa sea siempre la duena) y se suelta en <Destroy>.
+        """
+        self._reclamar_atajos()
+        self.bind("<FocusIn>", lambda e: self._reclamar_atajos(), add="+")
+        self.bind("<Destroy>", lambda e: self._soltar_atajos(), add="+")
+
+    def _reclamar_atajos(self):
         self.bind_all("<Control-g>", lambda e: self._save())
         self.bind_all("<Control-G>", lambda e: self._save())
         self.bind_all("<F5>", lambda e: self._refresh_all())
         self.bind_all("<Escape>", lambda e: self._on_escape())
+
+    def _soltar_atajos(self):
+        for seq in self._SHORTCUT_SEQS:
+            try:
+                self.unbind_all(seq)
+            except Exception:
+                pass
 
     def _on_escape(self):
         """Cierra la ventana al presionar Escape (solo si no hay diálogos activos)."""

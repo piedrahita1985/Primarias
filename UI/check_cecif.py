@@ -16,8 +16,10 @@ from UI._mov_utils import (
     get_date_value,
     make_date_input,
     make_labeled_entry,
+    make_required_label,
     only_numeric,
     upper_text_var,
+    validate_required_fields,
 )
 
 
@@ -296,7 +298,7 @@ class CheckCECIFWindow(tk.Toplevel):
             sec.grid_columnconfigure(c, weight=1)
 
         self.w_fecha_recepcion = make_date_input(sec, 0, 0, "Fecha Recepción",
-                                                 allow_past=True, empty_default=False)
+                                                 allow_past=True, empty_default=False, required=True)
 
         fab_names = [f.get("fabricante", "") for f in self._fabricantes if f.get("fabricante")]
         tk.Label(sec, text="Proveedor", bg=COLORS["secondary"], fg=COLORS["text_dark"],
@@ -315,8 +317,7 @@ class CheckCECIFWindow(tk.Toplevel):
         for c in range(4):
             sec.grid_columnconfigure(c, weight=1)
 
-        tk.Label(sec, text="Código Producto", bg=COLORS["secondary"], fg=COLORS["text_dark"],
-                 font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", padx=8, pady=(6, 2))
+        make_required_label(sec, "Código Producto", 0, 0)
         self.v_codigo = tk.StringVar()
         self.cb_codigo = ttk.Combobox(sec, textvariable=self.v_codigo,
                                       values=self._sustancias_codigos, state="normal",
@@ -338,7 +339,7 @@ class CheckCECIFWindow(tk.Toplevel):
         make_labeled_entry(sec, "Lote", self.v_lote, 0, 2)
 
         self.v_cantidad = tk.StringVar()
-        e_cant = make_labeled_entry(sec, "Cantidad", self.v_cantidad, 0, 2)
+        self._e_cantidad = e_cant = make_labeled_entry(sec, "Cantidad", self.v_cantidad, 0, 2, required=True)
         e_cant.bind("<KeyPress>", only_numeric)
 
         self.v_obs_prod = tk.StringVar()
@@ -493,8 +494,13 @@ class CheckCECIFWindow(tk.Toplevel):
     def _save(self):
         # --- Campos obligatorios ---
         fecha = get_date_value(self.w_fecha_recepcion)
-        if not fecha:
-            messagebox.showwarning("Aviso", "Ingrese la Fecha de Recepción.", parent=self)
+        campos_obligatorios = {
+            "Fecha Recepción": (self.w_fecha_recepcion, fecha),
+            "Código Producto": (self.cb_codigo, self.v_codigo.get().strip()),
+            "Cantidad": (self._e_cantidad, self.v_cantidad.get().strip()),
+        }
+        ok, _faltantes = validate_required_fields(campos_obligatorios, parent=self)
+        if not ok:
             return
 
         if self._current_sustancia is None:
@@ -505,8 +511,12 @@ class CheckCECIFWindow(tk.Toplevel):
             #messagebox.showwarning("Aviso", "Ingrese el número de Lote.", parent=self)
             #return
 
-        if not self.v_cantidad.get().strip():
-            messagebox.showwarning("Aviso", "Ingrese la Cantidad.", parent=self)
+        cantidad_txt = self.v_cantidad.get().strip()
+        try:
+            if float(cantidad_txt.replace(",", ".")) <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("Aviso", "La Cantidad debe ser un número mayor a cero.", parent=self)
             return
 
         # --- Verificación: todos los ítems deben estar respondidos ---
@@ -562,7 +572,18 @@ class CheckCECIFWindow(tk.Toplevel):
             "ficha_seg": verificacion.get("ficha_seguridad") == "Si",
         }
 
-        chk.guardar_cecif_nuevo(self._cecif_items, datos)
+        if not messagebox.askyesno(
+            "Confirmar guardado",
+            "¿Desea guardar la lista de chequeo CECIF con las firmas seleccionadas?",
+            parent=self,
+        ):
+            return
+
+        try:
+            chk.guardar_cecif_nuevo(self._cecif_items, datos)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo guardar la lista de chequeo.\n\n{e}", parent=self)
+            return
         messagebox.showinfo("Guardado", "Lista de chequeo CECIF guardada exitosamente.", parent=self)
         self.destroy()
         from UI.entradas import EntradasWindow

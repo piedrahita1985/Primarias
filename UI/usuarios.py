@@ -101,7 +101,7 @@ class UsuariosWindow(MaestraBase):
         form_label(f, "Usuario", 0, 0, 2)
         form_entry(f, self._v_usuario, 1, 0, 2)
 
-        form_label(f, "Contrasena", 0, 2, 2)
+        form_label(f, "Contrasena (vacío = no cambiar; obligatoria al crear)", 0, 2, 2)
         self._entry_pass = form_entry(f, self._v_contrasena, 1, 2, 2, show="*")
 
         form_label(f, "Nombre completo", 0, 4, 2)
@@ -132,7 +132,7 @@ class UsuariosWindow(MaestraBase):
         )
         self._combo_rol.grid(row=4, column=0, columnspan=2, sticky="ew", padx=(0, 10), pady=(2, 6))
 
-        form_label(f, "Firma Password", 3, 2, 2)
+        form_label(f, "Firma Password (vacío = no cambiar)", 3, 2, 2)
         form_entry(f, self._v_firma_password, 4, 2, 2, show="*")
 
         form_label(f, "Firma", 3, 4, 2)
@@ -259,13 +259,17 @@ class UsuariosWindow(MaestraBase):
     def _set_form_data(self, r: dict):
         self._v_usuario.set(r.get("usuario", ""))
         self._v_nombre.set(r.get("nombre", ""))
-        self._v_contrasena.set(r.get("contrasena", ""))
+        # No precargar el hash bcrypt almacenado: dejarlo vacio significa
+        # "no cambiar" (ver actualizar_usuario en database.py). Precargarlo
+        # aqui causaba que reenviarlo sin tocarlo lo re-hasheara como si
+        # fuera texto plano, dejando al usuario sin poder iniciar sesion.
+        self._v_contrasena.set("")
         self._v_rol.set(r.get("rol", ""))
         permisos = r.get("permisos", {})
         for k, v in self._perm_vars.items():
             v.set(bool(permisos.get(k, False)))
         self._v_firma_path.set(permisos.get("firma_path", ""))
-        self._v_firma_password.set(permisos.get("firma_password", ""))
+        self._v_firma_password.set("")
 
     def _clear_form(self):
         self._v_usuario.set("")
@@ -289,7 +293,9 @@ class UsuariosWindow(MaestraBase):
             return False, "El usuario es obligatorio."
         if not datos.get("nombre"):
             return False, "El nombre completo es obligatorio."
-        if not datos.get("contrasena"):
+        # Al editar, la contrasena se deja vacia a proposito para "no cambiar"
+        # (ver _set_form_data); solo es obligatoria al crear un usuario nuevo.
+        if self._modo == "nuevo" and not datos.get("contrasena"):
             return False, "La contrasena es obligatoria."
         if not datos.get("rol"):
             return False, "Debe seleccionar un rol."

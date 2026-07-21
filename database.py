@@ -1339,6 +1339,14 @@ class KardexDB:
             "permisos": permisos,
         }
 
+    @staticmethod
+    def _hash_si_hace_falta(valor):
+        """Hashea 'valor' salvo que ya sea un hash bcrypt (evita hash-de-hash
+        si el llamador reenvia por error un valor ya hasheado)."""
+        if not valor:
+            return valor
+        return valor if auth.is_hashed(valor) else auth.hash_password(valor)
+
     def crear_usuario(self, datos: dict) -> int:
         ph = self._ph()
         firma_password = datos.get("permisos", {}).get("firma_password")
@@ -1347,10 +1355,10 @@ class KardexDB:
                 (usuario, contrasena, nombre, rol, estado, firma_path, firma_password)
                 VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
             (
-                datos["usuario"], auth.hash_password(datos["contrasena"]), datos["nombre"],
+                datos["usuario"], self._hash_si_hace_falta(datos["contrasena"]), datos["nombre"],
                 datos.get("rol", ""), datos.get("estado", "HABILITADA"),
                 datos.get("permisos", {}).get("firma_path"),
-                auth.hash_password(firma_password) if firma_password else firma_password,
+                self._hash_si_hace_falta(firma_password),
             ),
         )
         self._insertar_permisos(uid, datos.get("permisos", {}))
@@ -1358,22 +1366,30 @@ class KardexDB:
 
     def actualizar_usuario(self, id_usuario: int, datos: dict):
         ph = self._ph()
-        firma_password = datos.get("permisos", {}).get("firma_password")
         self._execute(
             f"""UPDATE maestra_usuarios SET nombre={ph}, rol={ph}, estado={ph},
-                firma_path={ph}, firma_password={ph} WHERE id={ph}""",
+                firma_path={ph} WHERE id={ph}""",
             (
                 datos["nombre"], datos.get("rol", ""),
                 datos.get("estado", "HABILITADA"),
                 datos.get("permisos", {}).get("firma_path"),
-                auth.hash_password(firma_password) if firma_password else firma_password,
                 id_usuario,
             ),
         )
+        # contrasena/firma_password solo se tocan si el formulario trajo un
+        # valor nuevo; en blanco significa "no cambiar" (ver UI/usuarios.py).
+        # Si se tocan, _hash_si_hace_falta evita re-hashear un valor que ya
+        # viniera hasheado.
         if datos.get("contrasena"):
             self._execute(
                 f"UPDATE maestra_usuarios SET contrasena={ph} WHERE id={ph}",
-                (auth.hash_password(datos["contrasena"]), id_usuario),
+                (self._hash_si_hace_falta(datos["contrasena"]), id_usuario),
+            )
+        firma_password = datos.get("permisos", {}).get("firma_password")
+        if firma_password:
+            self._execute(
+                f"UPDATE maestra_usuarios SET firma_password={ph} WHERE id={ph}",
+                (self._hash_si_hace_falta(firma_password), id_usuario),
             )
         if "permisos" in datos:
             self._actualizar_permisos(id_usuario, datos["permisos"])

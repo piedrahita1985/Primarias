@@ -9,8 +9,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 from database import get_db
 
 
+_FECHA_VACIA = {"", "SD", "N.A", "N/R", "NO HAY", "SIN ASIGNAR", "V", "VIGENTE"}
+
+
 def parse_date(val):
-    if not val or str(val).strip() in ("", "SD", "N.A", "N/R", "No Hay", "Sin Asignar", "V", "VIGENTE"):
+    # Comparacion case-insensitive: la fuente trae "Vigente", "VIGENTE", "No Hay",
+    # etc. con capitalizacion inconsistente. Compararlas tal cual dejaba pasar
+    # "Vigente" (con mayuscula inicial) como si fuera una fecha valida.
+    if not val or str(val).strip().upper() in _FECHA_VACIA:
         return ""
     val = str(val).strip()
     if "-" in val and len(val) >= 10:
@@ -24,16 +30,27 @@ def parse_date(val):
             return datetime.strptime(val, "%d/%m/%Y").strftime("%Y-%m-%d")
         except:
             pass
+    print(f"  ⚠️ Fecha no reconocida, se guarda tal cual: {val!r}")
     return val
 
 
-def parse_float(val):
-    if not val or str(val).strip() in ("", "N/A", "N.E", "Sin Asignar", "No Hay", "0.0", "."):
+_FLOAT_VACIO = {"", "N/A", "N.E", "SIN ASIGNAR", "NO HAY", "0.0", "."}
+
+
+def parse_float(val, campo="", row_num=None, permitir_negativo=True):
+    if not val or str(val).strip().upper() in _FLOAT_VACIO:
         return 0.0
+    txt = str(val).strip()
     try:
-        return float(str(val).strip().replace(",", "."))
-    except:
+        f = float(txt.replace(",", "."))
+    except ValueError:
+        ubicacion = f"fila {row_num}, " if row_num else ""
+        print(f"  ⚠️ {ubicacion}campo {campo!r}: valor no numerico {val!r}, se usa 0.0")
         return 0.0
+    if f < 0 and not permitir_negativo:
+        ubicacion = f"fila {row_num}, " if row_num else ""
+        print(f"  ⚠️ {ubicacion}campo {campo!r}: valor negativo {val!r}, revisar el dato de origen")
+    return f
 
 
 def parse_bool(val):
@@ -196,18 +213,24 @@ def main(csv_path):
                 fecha_ingreso = parse_date(row.get("Fecha de Ingreso", ""))
                 fecha_vencimiento = parse_date(row.get("Fecha de Vencimiento", ""))
                 unidad = row.get("Unidad", "").strip()
-                presentacion = parse_float(row.get("Presentación", ""))
+                presentacion = parse_float(row.get("Presentación", ""), campo="Presentación", row_num=row_num)
                 potencia = row.get("Potencia", "").strip()
                 codigo_sistema = row.get("Código del Sistema", "").strip()
-                
+
                 existencia_total = row.get("Existencia Total", "").strip()
-                cantidad_envases = parse_float(existencia_total)
-                
+                cantidad_envases = parse_float(
+                    existencia_total, campo="Existencia Total", row_num=row_num, permitir_negativo=False
+                )
+
                 certificado_anl = parse_bool(row.get("Certificado Analítico", ""))
                 ficha_seguridad = parse_bool(row.get("Ficha de Seguridad", ""))
                 factura_compra = parse_bool(row.get("Factura de compra", ""))
 
-                id_fabricante = get_or_create_fabricante(db, fabricante or propiedad)
+                # No usar "Propiedad" como fabricante cuando "Fabricante" viene
+                # vacio: son columnas distintas (Propiedad describe la sustancia,
+                # no quien la fabrica) y mezclarlas ensuciaba el catalogo de
+                # fabricantes con valores como "CECIF" o "Vacio".
+                id_fabricante = get_or_create_fabricante(db, fabricante)
                 id_unidad = get_or_create_unidad(db, unidad)
                 id_condicion = get_or_create_condicion(db, condicion)
                 id_color = get_or_create_color(db, color)

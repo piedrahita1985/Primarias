@@ -161,7 +161,8 @@ class InventarioWindow(tk.Toplevel):
         page_rows = self._all_rows[start:start + self._page_size]
         for row, tag in page_rows:
             values = [row.get(c[0], "") for c in COLUMNS]
-            self.tree.insert("", "end", values=values, tags=(tag,) if tag else ())
+            iid = str(row.get("id", ""))
+            self.tree.insert("", "end", iid=iid, values=values, tags=(tag,) if tag else ())
         self._update_pagination_buttons()
 
     def _prev_page(self):
@@ -262,7 +263,18 @@ class InventarioWindow(tk.Toplevel):
         self._refresh_job = None
         if not self.winfo_exists():
             return
+        # El refresco automatico reconstruye toda la tabla; sin esto, cada 3s
+        # se perdia la fila seleccionada y la posicion del scroll mientras el
+        # usuario estaba trabajando (revisando o por seleccionar un registro).
+        tree = self.tree.tree
+        seleccion_previa = tree.selection()
+        scroll_previo = tree.yview()
         self._load_data()
+        if seleccion_previa:
+            vigentes = [iid for iid in seleccion_previa if tree.exists(iid)]
+            if vigentes:
+                tree.selection_set(vigentes)
+        tree.yview_moveto(scroll_previo[0])
         self._schedule_refresh()
 
     def _on_destroy(self, _event=None):

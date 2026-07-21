@@ -508,6 +508,12 @@ class PrestamoDetalleWindow(tk.Toplevel):
             messagebox.showwarning("Aviso",
                 "Seleccione la firma de quien entrega el estándar.", parent=self)
             return
+        if not messagebox.askyesno(
+            "Confirmar entrega",
+            "¿Desea registrar la entrega del estándar con la firma seleccionada?",
+            parent=self,
+        ):
+            return
         firma_path = self._firma_entrega.get_path()
         ok, msg = prest.firmar_entrega(
             id_prestamo=self._prestamo["id"],
@@ -562,6 +568,12 @@ class PrestamoDetalleWindow(tk.Toplevel):
         if id_verif is None:
             messagebox.showwarning("Aviso",
                 "Seleccione la firma de quien verifica el recibido.", parent=self)
+            return
+        if not messagebox.askyesno(
+            "Confirmar devolución",
+            "¿Desea registrar la devolución del estándar con la firma seleccionada?",
+            parent=self,
+        ):
             return
         firma_verif = self._firma_verificado.get_path()
         ok, msg = prest.completar_devolucion(

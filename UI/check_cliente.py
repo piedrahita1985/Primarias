@@ -16,8 +16,10 @@ from UI._mov_utils import (
     get_date_value,
     make_date_input,
     make_labeled_entry,
+    make_required_label,
     only_numeric,
     upper_text_var,
+    validate_required_fields,
 )
 from UI.check_cecif import FirmaSelector, VerifRow
 
@@ -132,19 +134,18 @@ class CheckClienteWindow(tk.Toplevel):
             sec.grid_columnconfigure(c, weight=1)
 
         self.w_fecha_recepcion = make_date_input(sec, 0, 0, "Fecha Recepción",
-                                                 allow_past=True, empty_default=False)
+                                                 allow_past=True, empty_default=False, required=True)
 
         self.v_nombre_cliente = tk.StringVar()
         upper_text_var(self.v_nombre_cliente)
-        make_labeled_entry(sec, "Nombre del Cliente", self.v_nombre_cliente, 0, 1, width=40)
+        self._e_nombre_cliente = make_labeled_entry(sec, "Nombre del Cliente", self.v_nombre_cliente, 0, 1, width=40, required=True)
 
     def _build_section_producto(self):
         sec = self._sec("Sustancia de referencia recibida")
         for c in range(4):
             sec.grid_columnconfigure(c, weight=1)
 
-        tk.Label(sec, text="Código Producto", bg=COLORS["secondary"], fg=COLORS["text_dark"],
-                 font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky="w", padx=8, pady=(6, 2))
+        make_required_label(sec, "Código Producto", 0, 0)
         self.v_codigo = tk.StringVar()
         self.cb_codigo = ttk.Combobox(sec, textvariable=self.v_codigo,
                                       values=self._sustancias_codigos, state="normal",
@@ -162,7 +163,7 @@ class CheckClienteWindow(tk.Toplevel):
         self.cb_unidad.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 8))
 
         self.v_cantidad = tk.StringVar()
-        e_cant = make_labeled_entry(sec, "Cantidad", self.v_cantidad, 0, 2)
+        self._e_cantidad = e_cant = make_labeled_entry(sec, "Cantidad", self.v_cantidad, 0, 2, required=True)
         e_cant.bind("<KeyPress>", only_numeric)
 
         self.v_obs_prod = tk.StringVar()
@@ -328,21 +329,27 @@ class CheckClienteWindow(tk.Toplevel):
     def _save(self):
         # --- Campos obligatorios ---
         fecha = get_date_value(self.w_fecha_recepcion)
-        if not fecha:
-            messagebox.showwarning("Aviso", "Ingrese la Fecha de Recepción.", parent=self)
-            return
-
         nombre_cliente = self.v_nombre_cliente.get().strip()
-        if not nombre_cliente:
-            messagebox.showwarning("Aviso", "Ingrese el Nombre del Cliente.", parent=self)
+        campos_obligatorios = {
+            "Fecha Recepción": (self.w_fecha_recepcion, fecha),
+            "Nombre del Cliente": (self._e_nombre_cliente, nombre_cliente),
+            "Código Producto": (self.cb_codigo, self.v_codigo.get().strip()),
+            "Cantidad": (self._e_cantidad, self.v_cantidad.get().strip()),
+        }
+        ok, _faltantes = validate_required_fields(campos_obligatorios, parent=self)
+        if not ok:
             return
 
         if self._current_sustancia is None:
             messagebox.showwarning("Aviso", "Seleccione un Código de Producto válido.", parent=self)
             return
 
-        if not self.v_cantidad.get().strip():
-            messagebox.showwarning("Aviso", "Ingrese la Cantidad.", parent=self)
+        cantidad_txt = self.v_cantidad.get().strip()
+        try:
+            if float(cantidad_txt.replace(",", ".")) <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("Aviso", "La Cantidad debe ser un número mayor a cero.", parent=self)
             return
 
         # --- Verificación: todos los ítems deben estar respondidos ---
@@ -394,7 +401,18 @@ class CheckClienteWindow(tk.Toplevel):
             "lote_opcional": True,
         }
 
-        chk.guardar_cliente_nuevo(self._clientes_items, datos)
+        if not messagebox.askyesno(
+            "Confirmar guardado",
+            "¿Desea guardar la lista de chequeo de Cliente con las firmas seleccionadas?",
+            parent=self,
+        ):
+            return
+
+        try:
+            chk.guardar_cliente_nuevo(self._clientes_items, datos)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo guardar la lista de chequeo.\n\n{e}", parent=self)
+            return
         messagebox.showinfo("Guardado", "Lista de chequeo de Cliente guardada exitosamente.", parent=self)
         self.destroy()
         from UI.entradas import EntradasWindow
