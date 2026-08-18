@@ -108,7 +108,7 @@ def actualizar(id_entrada, cambios, usuario="SISTEMA"):
                 if cambios.get("cantidad") is not None:
                     nueva_cantidad_mov = common.to_float(cambios["cantidad"])
                     delta = nueva_cantidad_mov - common.to_float(entrada_orig.get("cantidad"))
-                    if delta != 0:
+                    if abs(delta) > common.EPSILON_STOCK:
                         stock_actual = db.get_stock_actual(id_entrada) or 0
                         nueva_stock = stock_actual + delta
                         if nueva_stock < -common.EPSILON_STOCK:
@@ -116,7 +116,9 @@ def actualizar(id_entrada, cambios, usuario="SISTEMA"):
                                 "La cantidad editada dejaria el stock en negativo "
                                 "(ya hay salidas o prestamos registrados sobre este lote)."
                             )
-                        db.actualizar_stock(id_entrada, max(0.0, nueva_stock))
+                        db.actualizar_stock(
+                            id_entrada, max(0.0, nueva_stock), valor_esperado=stock_actual
+                        )
                 certificado = (
                     int(bool(cambios.get("certificado_anl", False)))
                     if "certificado_anl" in cambios else None

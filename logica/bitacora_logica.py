@@ -1,3 +1,5 @@
+import logging
+
 from database import get_db
 
 
@@ -12,6 +14,18 @@ def registrar(modulo, accion, id_registro, detalle="", usuario="SISTEMA"):
 
 
 def registrar_campos(tipo_operacion, id_registro, usuario="SISTEMA", cambios=None):
+    """Registra en la bitacora de auditoria.
+
+    Se llama siempre DESPUES de que la operacion de negocio (crear/actualizar
+    entrada, salida, prestamo, ...) ya fue confirmada en su propia conexion/
+    commit. Si esta escritura de auditoria falla (ej. "database is locked" por
+    otra conexion concurrente), NO debe propagar la excepcion: el llamador la
+    interpretaria como que la operacion completa fallo y se lo mostraria al
+    usuario como error, cuando en realidad el movimiento ya quedo guardado y
+    el stock ya se ajusto. Eso llevaba a reintentos que duplicaban el
+    movimiento y volvian a descontar stock. Se registra el fallo en el log de
+    errores de la app en su lugar.
+    """
     cambios = cambios or []
     if not cambios:
         cambios = [{"campo": "REGISTRO", "valor_anterior": "", "valor_nuevo": "SIN CAMBIOS"}]
@@ -27,6 +41,12 @@ def registrar_campos(tipo_operacion, id_registro, usuario="SISTEMA", cambios=Non
                 valor_anterior=str(c.get("valor_anterior", "") or ""),
                 valor_nuevo=str(c.get("valor_nuevo", "") or ""),
             )
+    except Exception:
+        logging.getLogger(__name__).error(
+            "No se pudo registrar en bitacora (tipo_operacion=%s, id_registro=%s); "
+            "la operacion de negocio ya se habia confirmado y no se ve afectada.",
+            tipo_operacion, id_registro, exc_info=True,
+        )
     finally:
         db.close()
 

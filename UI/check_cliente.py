@@ -5,7 +5,6 @@ from tkinter import messagebox, ttk
 
 from PIL import Image, ImageTk
 
-from app_paths import resource_path
 from config.config import COLORS
 from logica import check_logica as chk
 from logica import movimientos_common as common

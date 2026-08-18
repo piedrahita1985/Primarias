@@ -6,7 +6,7 @@ import shutil
 
 import logica.usuarios_logica as _logica
 from config.config import COLORS
-from app_paths import app_base_path, resource_path
+from app_paths import writable_base_path, writable_path
 from UI._base_maestra import MaestraBase, form_label, form_entry, form_estado
 
 _ROLES = ["administrador", "analista", "supervisor", "visualizador"]
@@ -224,12 +224,12 @@ class UsuariosWindow(MaestraBase):
         )
         if not path:
             return
-        firmas_dir = Path(resource_path("firmas"))
+        firmas_dir = Path(writable_path("firmas"))
         firmas_dir.mkdir(parents=True, exist_ok=True)
         src = Path(path)
         dst = firmas_dir / src.name
         shutil.copy2(src, dst)
-        base = app_base_path().resolve()
+        base = writable_base_path().resolve()
         try:
             relative = dst.resolve().relative_to(base)
             self._v_firma_path.set(relative.as_posix())

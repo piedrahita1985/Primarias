@@ -1,5 +1,6 @@
 # migrar_inventario.py - VERSIÓN CORREGIDA
 import csv
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -51,6 +52,58 @@ def parse_float(val, campo="", row_num=None, permitir_negativo=True):
         ubicacion = f"fila {row_num}, " if row_num else ""
         print(f"  ⚠️ {ubicacion}campo {campo!r}: valor negativo {val!r}, revisar el dato de origen")
     return f
+
+
+_PRES_SIMPLE_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*[a-zA-Z]*\.?\s*$")
+_PRES_LEADING_NUM_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\b")
+_PRES_ANY_NUM_RE = re.compile(r"(\d+(?:[.,]\d+)?)")
+
+
+def parse_presentacion(val, campo="Presentación", row_num=None):
+    """Extrae el numero literal de 'Presentacion' (contenido por envase).
+
+    A diferencia de parse_float, este campo en el CSV de origen casi siempre
+    trae el numero pegado a una unidad de texto libre ("189 mg", "100mg",
+    "1,5 ml", "30 tab") en vez de un numero puro -- parse_float no puede con
+    eso y devolvia 0.0 en silencio para la gran mayoria de las filas.
+
+    El campo se toma tal cual viene, sin inventar multiplicaciones: para
+    expresiones compuestas ("3 x 1,2 mL", "10 Ampollas x 5 mL c/u") se usa
+    el primer numero encontrado (el conteo de unidades), NO el producto --
+    no hay forma automatica de saber si "presentacion" describe la unidad
+    grande o la chica, y multiplicar fue un error en una version anterior de
+    este script. cantidad_actual (envases) se deriva despues como
+    Existencia Total / presentacion, asi que un numero literal correcto es
+    lo unico que hace falta aqui.
+    """
+    txt = str(val or "").strip()
+    if not txt or txt.upper() in _FLOAT_VACIO:
+        return 0.0
+
+    if re.fullmatch(r"[\d.,]+", txt):
+        try:
+            return float(txt.replace(",", "."))
+        except ValueError:
+            pass
+
+    m = _PRES_SIMPLE_RE.match(txt)
+    if m:
+        return float(m.group(1).replace(",", "."))
+
+    ubicacion = f"fila {row_num}, " if row_num else ""
+
+    m = _PRES_LEADING_NUM_RE.match(txt)
+    if m:
+        print(f"  ⚠️ {ubicacion}campo {campo!r}: valor con texto adicional {val!r}, se uso {m.group(1)} -- REVISAR.")
+        return float(m.group(1).replace(",", "."))
+
+    m = _PRES_ANY_NUM_RE.search(txt)
+    if m:
+        print(f"  ⚠️ {ubicacion}campo {campo!r}: numero encontrado dentro de texto {val!r}, se uso {m.group(1)} -- REVISAR.")
+        return float(m.group(1).replace(",", "."))
+
+    print(f"  ⚠️ {ubicacion}campo {campo!r}: sin numero reconocible en {val!r}, se usa 0.0 -- REVISAR.")
+    return 0.0
 
 
 def parse_bool(val):
@@ -213,13 +266,13 @@ def main(csv_path):
                 fecha_ingreso = parse_date(row.get("Fecha de Ingreso", ""))
                 fecha_vencimiento = parse_date(row.get("Fecha de Vencimiento", ""))
                 unidad = row.get("Unidad", "").strip()
-                presentacion = parse_float(row.get("Presentación", ""), campo="Presentación", row_num=row_num)
+                presentacion = parse_presentacion(row.get("Presentación", ""), campo="Presentación", row_num=row_num)
                 potencia = row.get("Potencia", "").strip()
                 codigo_sistema = row.get("Código del Sistema", "").strip()
 
-                existencia_total = row.get("Existencia Total", "").strip()
-                cantidad_envases = parse_float(
-                    existencia_total, campo="Existencia Total", row_num=row_num, permitir_negativo=False
+                existencia_total = parse_float(
+                    row.get("Existencia Total", ""), campo="Existencia Total", row_num=row_num,
+                    permitir_negativo=False
                 )
 
                 certificado_anl = parse_bool(row.get("Certificado Analítico", ""))
@@ -261,7 +314,13 @@ def main(csv_path):
                     print(f"⏭️ Fila {row_num}: Duplicado {codigo} - lote {lote}, omitido")
                     continue
 
-                stock_total = cantidad_envases * (presentacion if presentacion > 0 else 1)
+                # "Existencia Total" en el CSV es la cantidad total en la unidad de la
+                # sustancia (lo que aca llamamos stock), NO un conteo de envases. Los
+                # envases (cantidad_actual) se derivan dividiendo por la presentacion
+                # (contenido por envase): p.ej. presentacion=180mg, existencia=170mg ->
+                # 170/180 = 0.94 envases (un envase iniciado, no lleno).
+                stock_total = existencia_total
+                cantidad_envases = (existencia_total / presentacion) if presentacion > 0 else existencia_total
                 estado = "ACTIVO" if cantidad_envases > 0 else "AGOTADO"
                 
                 cursor.execute("""

@@ -1,3 +1,4 @@
 pillow==12.2.0
 pyodbc
 bcrypt==5.0.0
+tkcalendar==1.6.1

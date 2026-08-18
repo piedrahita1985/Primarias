@@ -12,6 +12,7 @@ from logica import usuarios_logica as usr
 from UI._mov_utils import apply_default_window
 
 IMAGE_PATH = resource_path("imagenes", "imagenlogin.jpg")
+ICON_PATH = resource_path("imagenes", "icono.ico")
 
 
 class LoginApp(tk.Tk):
@@ -20,6 +21,7 @@ class LoginApp(tk.Tk):
 		self.title(PROJECT_NAME)
 		self.resizable(True, True)
 		self.configure(bg=COLORS["secondary"])
+		self._set_app_icon()
 
 		self._var_usuario = tk.StringVar()
 		self._var_password = tk.StringVar()
@@ -30,6 +32,16 @@ class LoginApp(tk.Tk):
 
 		apply_default_window(self, width=WINDOW_WIDTH, height=WINDOW_HEIGHT, min_width=1040, min_height=640)
 		self._build_ui()
+
+	def _set_app_icon(self):
+		"""Fija el icono de la ventana raiz con default=... para que se propague
+		automaticamente a todas las ventanas Toplevel (menu y cada modulo) sin
+		tener que repetirlo en cada una; tambien es el icono que Windows usa en
+		la barra de tareas."""
+		try:
+			self.iconbitmap(default=str(ICON_PATH))
+		except Exception:
+			pass
 
 	def report_callback_exception(self, exc, val, tb):
 		"""Manejador global de excepciones de Tk. Sin esto, cualquier error que

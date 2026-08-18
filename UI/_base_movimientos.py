@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from config.config import COLORS
+from UI._mov_utils import bind_button_hover
 
 
 class MovimientosBase(tk.Toplevel):
@@ -143,6 +144,7 @@ class MovimientosBase(tk.Toplevel):
             pag_frame, text="◀ Anterior", command=self._prev_page, **btn_style
         )
         self.btn_pag_prev.pack(side="left", padx=2)
+        bind_button_hover(self.btn_pag_prev, COLORS["primary"])
 
         self.lbl_page = tk.Label(
             pag_frame,
@@ -157,6 +159,7 @@ class MovimientosBase(tk.Toplevel):
             pag_frame, text="Siguiente ▶", command=self._next_page, **btn_style
         )
         self.btn_pag_next.pack(side="left", padx=2)
+        bind_button_hover(self.btn_pag_next, COLORS["primary"])
 
         tk.Label(
             pag_frame,

@@ -11,7 +11,14 @@ from tkinter import filedialog, messagebox, ttk
 from config.config import COLORS
 from logica import inventario_mov_logica as inv
 from logica import movimientos_common as common
-from UI._mov_utils import apply_default_window, attach_treeview_sorting, draw_title
+from UI._mov_utils import (
+    apply_default_window,
+    attach_treeview_sorting,
+    bind_horizontal_wheel_scroll,
+    configure_row_stripes,
+    draw_title,
+    style_treeview,
+)
 
 try:
     from openpyxl import Workbook
@@ -117,9 +124,7 @@ class StockAnalistaWindow(tk.Toplevel):
         cols = [c[0] for c in COLUMNS]
         self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=18)
 
-        style = ttk.Style(self)
-        style.configure("Treeview", rowheight=24, font=("Segoe UI", 9))
-        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
+        style_treeview(self)
 
         sy = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         sx = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
@@ -134,12 +139,12 @@ class StockAnalistaWindow(tk.Toplevel):
 
         attach_treeview_sorting(self.tree)
 
+        configure_row_stripes(self.tree)
+        bind_horizontal_wheel_scroll(self.tree)
         self.tree.tag_configure("vencido", background="#FFD6D6")
         self.tree.tag_configure("proximo", background="#FFF3CD")
         self.tree.tag_configure("agotado", background="#E0E0E0")
         self.tree.tag_configure("ok",      background="#DFF7E2")
-        self.tree.tag_configure("par",     background="#FAFAFA")
-        self.tree.tag_configure("impar",   background="white")
 
         self.tree.bind("<Motion>", self._on_tree_motion)
         self.tree.bind("<Leave>", lambda _e: self._hide_tooltip())
@@ -547,9 +552,7 @@ class StockAnalistaWindow(tk.Toplevel):
         ]
         col_keys = [c[0] for c in hist_cols]
 
-        style = ttk.Style(win)
-        style.configure("Hist.Treeview", rowheight=24, font=("Segoe UI", 9))
-        style.configure("Hist.Treeview.Heading", font=("Segoe UI", 9, "bold"))
+        style_treeview(win, style_name="Hist.Treeview")
 
         tree = ttk.Treeview(
             table_wrap, columns=col_keys, show="headings",
@@ -566,8 +569,8 @@ class StockAnalistaWindow(tk.Toplevel):
             tree.heading(key, text=title)
             tree.column(key, width=width, anchor="center", minwidth=50, stretch=True)
 
-        tree.tag_configure("par",    background="#F0F4FC")
-        tree.tag_configure("impar",  background="white")
+        configure_row_stripes(tree)
+        bind_horizontal_wheel_scroll(tree)
         tree.tag_configure("anulada", background="#FADADD", foreground="#666")
 
         if rows_hist:

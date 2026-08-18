@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from app_paths import app_base_path
+from app_paths import writable_base_path
 from config.config import COLORS
 from logica import movimientos_common as common
 from logica import prestamos_logica as prest
@@ -42,7 +42,7 @@ def _resolve_firma_path(path_value):
     p = Path(raw)
     candidates = [p]
     if not p.is_absolute():
-        base = app_base_path()
+        base = writable_base_path()
         candidates.append(base / p)
         candidates.append(base / raw.replace("\\", "/"))
     for c in candidates:
@@ -974,10 +974,11 @@ class PrestamosWindow(tk.Toplevel):
     def _refresh_historial(self):
         self.tree_hist.clear()
         rows = prest.prestamos_completados(self._maestras)
-        for r in rows:
+        for idx, r in enumerate(rows):
             self.tree_hist.insert(
                 "", "end",
                 values=tuple(r.get(c[0], "") for c in self.HIST_COLS),
+                tags=("par" if idx % 2 == 0 else "impar",),
             )
 
     def _on_tab_change(self, _=None):

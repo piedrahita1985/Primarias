@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk
 from config.config import COLORS
+from UI._mov_utils import bind_horizontal_wheel_scroll, configure_row_stripes, style_treeview
 
 
 class SearchableTreeview(tk.Frame):
@@ -62,6 +63,9 @@ class SearchableTreeview(tk.Frame):
             tree_frame, columns=columns, show="headings", height=height, **kwargs
         )
         self.tree.pack(side="left", fill="both", expand=True)
+        style_treeview(self.tree)
+        configure_row_stripes(self.tree)
+        bind_horizontal_wheel_scroll(self.tree)
 
         # Scrollbar vertical
         ysb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
@@ -86,7 +90,15 @@ class SearchableTreeview(tk.Frame):
         return self.tree.tag_configure(tag, **kwargs)
 
     def insert(self, parent, index, values, **kwargs):
-        """Inserta un item y lo guarda en caché para búsqueda."""
+        """Inserta un item y lo guarda en caché para búsqueda.
+
+        Si hay un texto de búsqueda activo, los items que no coinciden se
+        cachean pero no se muestran. Sin esto, una recarga completa (clear()
+        seguido de insert() de todas las filas, como hace el auto-refresco de
+        inventario) hacia que el filtro del usuario "desapareciera" a los
+        pocos segundos porque insert() siempre mostraba la fila sin mirar el
+        texto de busqueda actual.
+        """
         item_id = self.tree.insert(parent, index, values=values, **kwargs)
         # Construir texto de búsqueda solo con las columnas especificadas
         search_parts = []
@@ -97,7 +109,17 @@ class SearchableTreeview(tk.Frame):
                 if col_index < len(values):
                     search_parts.append(str(values[col_index]).lower())
         search_text = " ".join(search_parts)
-        self._original_items[item_id] = (search_text, values, kwargs)
+        # 'iid' no se cachea: _on_search siempre lo pasa explícito al reinsertar
+        # (via item_id), y si el llamador tambien lo paso aqui (como hacen
+        # inventario.py y stock_analista.py) quedaria duplicado -> TypeError
+        # "got multiple values for keyword argument 'iid'".
+        cache_kwargs = {k: v for k, v in kwargs.items() if k != "iid"}
+        self._original_items[item_id] = (search_text, values, cache_kwargs)
+
+        active_filter = self._search_var.get().strip().lower()
+        if active_filter and active_filter not in search_text:
+            self.tree.delete(item_id)
+
         return item_id
 
     def delete(self, *items):

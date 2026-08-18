@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from config.config import COLORS
-from UI._mov_utils import apply_default_window
+from UI._mov_utils import apply_default_window, bind_button_hover
 
 
 class MaestraBase(tk.Toplevel):
@@ -228,19 +228,9 @@ class MaestraBase(tk.Toplevel):
         self._cargar_lista()
 
     def _accion_guardar(self):
-        if self.DIRECT_SAVE_ON_SELECTION and self._seleccionado_id is not None and self._modo == "ver":
-            self._modo = "actualizar"
-
         if self._modo not in ("nuevo", "actualizar"):
-            if self._seleccionado_id is not None:
-                self._modo = "actualizar"
-            else:
-                messagebox.showwarning(
-                    "Aviso",
-                    "Presione 'Nuevo' para agregar o seleccione un registro para editar y guardar.",
-                    parent=self,
-                )
-                return
+            self._modo = "actualizar" if self._seleccionado_id is not None else "nuevo"
+
         datos = self._get_form_data()
         valido, mensaje = self._validate(datos)
         if not valido:
@@ -279,7 +269,7 @@ class MaestraBase(tk.Toplevel):
 
 def _btn(parent, text, bg, cmd, width=12):
     """Crea un boton estandar para la barra de acciones."""
-    return tk.Button(
+    btn = tk.Button(
         parent,
         text=text,
         bg=bg,
@@ -293,8 +283,9 @@ def _btn(parent, text, bg, cmd, width=12):
         bd=0,
         command=cmd,
         activeforeground="white",
-        activebackground=bg,
     )
+    bind_button_hover(btn, bg)
+    return btn
 
 
 def form_label(parent, text, row, col, colspan=2):

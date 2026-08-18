@@ -5,7 +5,7 @@ from tkinter import messagebox, simpledialog, ttk
 
 from PIL import Image, ImageTk
 
-from app_paths import app_base_path, resource_path
+from app_paths import writable_base_path
 from config.config import COLORS
 from logica import check_logica as chk
 from logica import movimientos_common as common
@@ -147,7 +147,7 @@ class FirmaSelector(tk.Frame):
         p = Path(raw)
         candidates = [p]
         if not p.is_absolute():
-            base = app_base_path()
+            base = writable_base_path()
             candidates.append(base / p)
             candidates.append(base / raw.replace("\\", "/"))
 

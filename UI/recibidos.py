@@ -5,7 +5,14 @@ from config.config import COLORS
 from logica import movimientos_common as common
 from logica import prestamos_logica as prest
 from logica import usuarios_logica as usr
-from UI._mov_utils import attach_treeview_sorting, apply_default_window, draw_title
+from UI._mov_utils import (
+    apply_default_window,
+    attach_treeview_sorting,
+    bind_horizontal_wheel_scroll,
+    configure_row_stripes,
+    draw_title,
+    style_treeview,
+)
 
 
 FILTROS = ["Todos", "Pendientes por recibir", "Pendientes devolver"]
@@ -90,6 +97,9 @@ class RecibidosWindow(tk.Toplevel):
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, anchor="center")
         attach_treeview_sorting(self.tree)
+        style_treeview(self)
+        configure_row_stripes(self.tree)
+        bind_horizontal_wheel_scroll(self.tree)
         self.tree.tag_configure("vencido", background="#FFD6D6", foreground="#8B0000")
 
         ysb = ttk.Scrollbar(table_wrap, orient="vertical", command=self.tree.yview)
@@ -165,8 +175,10 @@ class RecibidosWindow(tk.Toplevel):
         rows.sort(key=lambda row: (str(row.get("fecha_limite") or "9999-99-99"), -(int(row.get("id") or 0))))
 
         today = __import__("datetime").date.today().isoformat()
-        for row in rows:
+        for idx, row in enumerate(rows):
             fecha_limite = str(row.get("fecha_limite") or "").strip()
+            vencido = fecha_limite and fecha_limite < today
+            tag = "vencido" if vencido else ("par" if idx % 2 == 0 else "impar")
             item_id = self.tree.insert(
                 "",
                 "end",
@@ -181,7 +193,7 @@ class RecibidosWindow(tk.Toplevel):
                     row.get("usuario_presta_nombre", ""),
                     fecha_limite,
                 ),
-                tags=("vencido",) if fecha_limite and fecha_limite < today else (),
+                tags=(tag,),
             )
             self._row_meta[item_id] = row
 

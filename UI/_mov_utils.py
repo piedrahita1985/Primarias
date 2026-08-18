@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 from datetime import date
 from datetime import datetime
 
@@ -65,6 +65,81 @@ def attach_treeview_sorting(tree):
 
     for col in tree["columns"]:
         tree.heading(col, command=lambda c=col: _sort_by(c))
+
+
+def style_treeview(widget, rowheight=27, font_size=10, style_name="Treeview"):
+    """Aplica un estilo ttk consistente (fuente, alto de fila, encabezado, selección)
+    a un Treeview. Centraliza lo que antes cada pantalla configuraba por su cuenta
+    con valores ligeramente distintos (24 vs 25px, sin color de encabezado, etc.).
+    `style_name` permite estilos con nombre propio (ej. "Hist.Treeview") para
+    ventanas secundarias que no deben compartir estilo con el Treeview principal."""
+    heading_style = f"{style_name}.Heading" if not style_name.endswith(".Heading") else style_name
+    style = ttk.Style(widget)
+    style.configure(
+        style_name,
+        rowheight=rowheight,
+        font=("Segoe UI", font_size),
+        fieldbackground=COLORS["surface"],
+        background=COLORS["surface"],
+    )
+    style.configure(
+        heading_style,
+        font=("Segoe UI", font_size, "bold"),
+        background=COLORS["primary_soft"],
+        foreground=COLORS["text_dark"],
+        relief="flat",
+    )
+    style.map(
+        style_name,
+        background=[("selected", COLORS["primary"])],
+        foreground=[("selected", "white")],
+    )
+    return style
+
+
+def bind_horizontal_wheel_scroll(tree, factor=6):
+    """Habilita Shift+rueda del mouse para desplazamiento horizontal rápido.
+
+    El scrollbar horizontal nativo de ttk se mueve muy pocos pixeles por 'unit',
+    asi que arrastrarlo o hacer clic en sus flechas se siente extremadamente
+    lento en tablas anchas (ej. inventario con 24 columnas). Shift+rueda mueve
+    varias 'units' por cada paso de la rueda para compensarlo.
+    """
+    def _on_shift_wheel(event):
+        tree.xview_scroll(int(-1 * (event.delta / 120) * factor), "units")
+        return "break"
+
+    tree.bind("<Shift-MouseWheel>", _on_shift_wheel)
+
+
+def configure_row_stripes(tree):
+    """Configura las etiquetas de fila alterna 'par'/'impar' con la paleta del proyecto.
+    Usar junto con una etiqueta de estado (ej. 'vencido'): aplicar la de estado cuando
+    exista y caer a 'par'/'impar' en el resto, para no perder la franja en filas sin alarma."""
+    tree.tag_configure("par", background=COLORS["surface_alt"])
+    tree.tag_configure("impar", background=COLORS["surface"])
+
+
+def _darken(hex_color, factor=0.85):
+    """Oscurece un color hex en el factor dado (0-1); usado para estados hover/active."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+    r, g, b = (max(0, min(255, int(c * factor))) for c in (r, g, b))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def bind_button_hover(btn, base_bg, hover_bg=None):
+    """Agrega retroalimentación visual (oscurecer) al pasar el mouse sobre un botón.
+    Los tk.Button planos (relief='flat') no dan ninguna señal de hover por defecto."""
+    hover_bg = hover_bg or _darken(base_bg)
+    btn.configure(activebackground=hover_bg)
+
+    def _on_enter(_e):
+        if str(btn["state"]) != "disabled":
+            btn.configure(bg=hover_bg)
+
+    btn.bind("<Enter>", _on_enter)
+    btn.bind("<Leave>", lambda _e: btn.configure(bg=base_bg))
 
 
 def only_letters(event):

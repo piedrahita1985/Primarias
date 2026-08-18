@@ -1069,7 +1069,7 @@ class EntradasWindow(MovimientosBase):
 
     def _fill_history(self, rows):
         self.h_tree.clear()
-        for r in rows:
+        for idx, r in enumerate(rows):
             self.h_tree.insert(
                 "",
                 "end",
@@ -1083,6 +1083,7 @@ class EntradasWindow(MovimientosBase):
                     r.get("unidad_nombre", ""),
                     r.get("estado", "ACTIVA"),
                 ),
+                tags=("par" if idx % 2 == 0 else "impar",),
             )
 
     def _selected_history_id(self):

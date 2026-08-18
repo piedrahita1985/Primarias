@@ -19,6 +19,7 @@ import sqlite3
 import json
 import os
 import sys
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 
@@ -29,6 +30,7 @@ except ImportError:
     _PYODBC_DISPONIBLE = False
 
 import auth
+from app_paths import writable_base_path
 
 # Tolerancia para comparaciones de stock: las conversiones repetidas
 # envases<->contenido (via presentacion) acumulan ruido de punto flotante del
@@ -40,8 +42,10 @@ EPSILON_STOCK = 1e-6
 # ── Resolución de ruta base ─────────────────────────────────────────────────
 
 def _ruta_base() -> str:
-    """Devuelve el directorio base del ejecutable o del script."""
-    return os.path.dirname(os.path.abspath(__file__))
+    """Devuelve el directorio base persistente (carpeta del .exe, o del script
+    en modo desarrollo). Usa writable_base_path(), NO _MEIPASS: config.json y
+    data/kardex.db deben sobrevivir entre ejecuciones de un build --onefile."""
+    return str(writable_base_path())
 
 
 CONFIG_PATH = os.path.join(_ruta_base(), "config.json")
@@ -1230,6 +1234,29 @@ class KardexDB:
     def commit(self):
         self._conn.commit()
 
+    @contextmanager
+    def _transaccion(self):
+        """Agrupa varias escrituras en un solo commit/rollback atomico.
+
+        Necesario para operaciones como 'firmar entrega de prestamo' que deben
+        ajustar el stock Y transicionar el estado del prestamo como una sola
+        unidad: sin esto, si el ajuste de stock quedaba confirmado pero la
+        transicion de estado fallaba (o viceversa) por una carrera con otra
+        conexion concurrente, el registro quedaba en un estado inconsistente
+        a medias. Cada get_db() abre su propia conexion sin transaccion
+        compartida entre operaciones, asi que esto solo protege los pasos
+        dentro de UNA llamada; se combina con actualizar_stock(valor_esperado=...)
+        y los UPDATE ... WHERE estado=... condicionados para detectar si otra
+        conexion ya modifico la fila en el medio.
+        """
+        try:
+            yield
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self.commit()
+
     def _execute(self, sql: str, params: tuple = ()):
         self._cursor.execute(sql, params)
         return self._cursor
@@ -1261,6 +1288,16 @@ class KardexDB:
 
     def _ph(self) -> str:
         return "?"
+
+    def _con_manejo_duplicado(self, fn, campo: str, valor):
+        """Ejecuta fn() (un INSERT/UPDATE) y convierte una violacion de UNIQUE
+        en un ValueError legible en vez de dejar pasar el IntegrityError crudo
+        del driver (sqlite3/pyodbc) hasta la UI."""
+        try:
+            return fn()
+        except (sqlite3.IntegrityError, *((pyodbc.IntegrityError,) if _PYODBC_DISPONIBLE else ())):
+            self._conn.rollback()
+            raise ValueError(f"Ya existe un registro con {campo} '{valor}'.")
 
     # ══════════════════════════════════════════════════════════════════════
     # USUARIOS
@@ -1339,6 +1376,16 @@ class KardexDB:
             "permisos": permisos,
         }
 
+    def rehash_firma_password(self, id_usuario: int, nuevo_hash: str) -> None:
+        """Reescribe firma_password ya hasheada (migracion perezosa desde texto
+        plano legado), mismo patron que get_usuario_login aplica a 'contrasena'."""
+        ph = self._ph()
+        self._execute(
+            f"UPDATE maestra_usuarios SET firma_password={ph} WHERE id={ph}",
+            (nuevo_hash, id_usuario),
+        )
+        self.commit()
+
     @staticmethod
     def _hash_si_hace_falta(valor):
         """Hashea 'valor' salvo que ya sea un hash bcrypt (evita hash-de-hash
@@ -1350,32 +1397,40 @@ class KardexDB:
     def crear_usuario(self, datos: dict) -> int:
         ph = self._ph()
         firma_password = datos.get("permisos", {}).get("firma_password")
-        uid = self._insert(
-            f"""INSERT INTO maestra_usuarios
-                (usuario, contrasena, nombre, rol, estado, firma_path, firma_password)
-                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
-            (
-                datos["usuario"], self._hash_si_hace_falta(datos["contrasena"]), datos["nombre"],
-                datos.get("rol", ""), datos.get("estado", "HABILITADA"),
-                datos.get("permisos", {}).get("firma_path"),
-                self._hash_si_hace_falta(firma_password),
-            ),
-        )
+        try:
+            uid = self._insert(
+                f"""INSERT INTO maestra_usuarios
+                    (usuario, contrasena, nombre, rol, estado, firma_path, firma_password)
+                    VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
+                (
+                    datos["usuario"], self._hash_si_hace_falta(datos["contrasena"]), datos["nombre"],
+                    datos.get("rol", ""), datos.get("estado", "HABILITADA"),
+                    datos.get("permisos", {}).get("firma_path"),
+                    self._hash_si_hace_falta(firma_password),
+                ),
+            )
+        except (sqlite3.IntegrityError, *((pyodbc.IntegrityError,) if _PYODBC_DISPONIBLE else ())):
+            self._conn.rollback()
+            raise ValueError(f"Ya existe un usuario con el nombre de usuario '{datos.get('usuario')}'.")
         self._insertar_permisos(uid, datos.get("permisos", {}))
         return uid
 
     def actualizar_usuario(self, id_usuario: int, datos: dict):
         ph = self._ph()
-        self._execute(
-            f"""UPDATE maestra_usuarios SET nombre={ph}, rol={ph}, estado={ph},
-                firma_path={ph} WHERE id={ph}""",
-            (
-                datos["nombre"], datos.get("rol", ""),
-                datos.get("estado", "HABILITADA"),
-                datos.get("permisos", {}).get("firma_path"),
-                id_usuario,
-            ),
-        )
+        try:
+            self._execute(
+                f"""UPDATE maestra_usuarios SET usuario={ph}, nombre={ph}, rol={ph}, estado={ph},
+                    firma_path={ph} WHERE id={ph}""",
+                (
+                    datos["usuario"], datos["nombre"], datos.get("rol", ""),
+                    datos.get("estado", "HABILITADA"),
+                    datos.get("permisos", {}).get("firma_path"),
+                    id_usuario,
+                ),
+            )
+        except (sqlite3.IntegrityError, *((pyodbc.IntegrityError,) if _PYODBC_DISPONIBLE else ())):
+            self._conn.rollback()
+            raise ValueError(f"Ya existe un usuario con el nombre de usuario '{datos.get('usuario')}'.")
         # contrasena/firma_password solo se tocan si el formulario trajo un
         # valor nuevo; en blanco significa "no cambiar" (ver UI/usuarios.py).
         # Si se tocan, _hash_si_hace_falta evita re-hashear un valor que ya
@@ -1467,15 +1522,21 @@ class KardexDB:
         return rows
 
     def crear_fabricante(self, nombre: str) -> int:
-        return self._insert(
-            f"INSERT INTO maestra_fabricantes (fabricante, estado) VALUES ({self._ph()},{self._ph()})",
-            (nombre, "HABILITADA"),
+        return self._con_manejo_duplicado(
+            lambda: self._insert(
+                f"INSERT INTO maestra_fabricantes (fabricante, estado) VALUES ({self._ph()},{self._ph()})",
+                (nombre, "HABILITADA"),
+            ),
+            "el fabricante", nombre,
         )
 
     def actualizar_fabricante(self, id_: int, nombre: str):
         ph = self._ph()
-        self._execute(
-            f"UPDATE maestra_fabricantes SET fabricante={ph} WHERE id={ph}", (nombre, id_)
+        self._con_manejo_duplicado(
+            lambda: self._execute(
+                f"UPDATE maestra_fabricantes SET fabricante={ph} WHERE id={ph}", (nombre, id_)
+            ),
+            "el fabricante", nombre,
         )
         self.commit()
 
@@ -1502,14 +1563,20 @@ class KardexDB:
         return rows
 
     def crear_unidad(self, nombre: str) -> int:
-        return self._insert(
-            f"INSERT INTO maestra_unidades (unidad, estado) VALUES ({self._ph()},{self._ph()})",
-            (nombre, "HABILITADA"),
+        return self._con_manejo_duplicado(
+            lambda: self._insert(
+                f"INSERT INTO maestra_unidades (unidad, estado) VALUES ({self._ph()},{self._ph()})",
+                (nombre, "HABILITADA"),
+            ),
+            "la unidad", nombre,
         )
 
     def actualizar_unidad(self, id_: int, nombre: str):
         ph = self._ph()
-        self._execute(f"UPDATE maestra_unidades SET unidad={ph} WHERE id={ph}", (nombre, id_))
+        self._con_manejo_duplicado(
+            lambda: self._execute(f"UPDATE maestra_unidades SET unidad={ph} WHERE id={ph}", (nombre, id_)),
+            "la unidad", nombre,
+        )
         self.commit()
 
     def habilitar_unidad(self, id_: int):
@@ -1535,15 +1602,21 @@ class KardexDB:
         return rows
 
     def crear_condicion(self, condicion: str) -> int:
-        return self._insert(
-            f"INSERT INTO maestra_condiciones (condicion, estado) VALUES ({self._ph()},{self._ph()})",
-            (condicion, "HABILITADA"),
+        return self._con_manejo_duplicado(
+            lambda: self._insert(
+                f"INSERT INTO maestra_condiciones (condicion, estado) VALUES ({self._ph()},{self._ph()})",
+                (condicion, "HABILITADA"),
+            ),
+            "la condición", condicion,
         )
 
     def actualizar_condicion(self, id_: int, condicion: str):
         ph = self._ph()
-        self._execute(
-            f"UPDATE maestra_condiciones SET condicion={ph} WHERE id={ph}", (condicion, id_)
+        self._con_manejo_duplicado(
+            lambda: self._execute(
+                f"UPDATE maestra_condiciones SET condicion={ph} WHERE id={ph}", (condicion, id_)
+            ),
+            "la condición", condicion,
         )
         self.commit()
 
@@ -1570,15 +1643,21 @@ class KardexDB:
         return rows
 
     def crear_color(self, color: str) -> int:
-        return self._insert(
-            f"INSERT INTO maestra_colores (color_refuerzo, estado) VALUES ({self._ph()},{self._ph()})",
-            (color, "HABILITADA"),
+        return self._con_manejo_duplicado(
+            lambda: self._insert(
+                f"INSERT INTO maestra_colores (color_refuerzo, estado) VALUES ({self._ph()},{self._ph()})",
+                (color, "HABILITADA"),
+            ),
+            "el color de refuerzo", color,
         )
 
     def actualizar_color(self, id_: int, color: str):
         ph = self._ph()
-        self._execute(
-            f"UPDATE maestra_colores SET color_refuerzo={ph} WHERE id={ph}", (color, id_)
+        self._con_manejo_duplicado(
+            lambda: self._execute(
+                f"UPDATE maestra_colores SET color_refuerzo={ph} WHERE id={ph}", (color, id_)
+            ),
+            "el color de refuerzo", color,
         )
         self.commit()
 
@@ -1610,16 +1689,22 @@ class KardexDB:
         return rows
 
     def crear_tipo_entrada(self, tipo: str) -> int:
-        return self._insert(
-            f"INSERT INTO maestra_tipos_entrada (tipo_entrada, estado) VALUES ({self._ph()},{self._ph()})",
-            (tipo, "HABILITADA"),
+        return self._con_manejo_duplicado(
+            lambda: self._insert(
+                f"INSERT INTO maestra_tipos_entrada (tipo_entrada, estado) VALUES ({self._ph()},{self._ph()})",
+                (tipo, "HABILITADA"),
+            ),
+            "el tipo de entrada", tipo,
         )
 
     def actualizar_tipo_entrada(self, id_: int, tipo: str, estado: str):
         ph = self._ph()
-        self._execute(
-            f"UPDATE maestra_tipos_entrada SET tipo_entrada={ph}, estado={ph} WHERE id={ph}",
-            (tipo, estado, id_),
+        self._con_manejo_duplicado(
+            lambda: self._execute(
+                f"UPDATE maestra_tipos_entrada SET tipo_entrada={ph}, estado={ph} WHERE id={ph}",
+                (tipo, estado, id_),
+            ),
+            "el tipo de entrada", tipo,
         )
         self.commit()
 
@@ -1652,16 +1737,22 @@ class KardexDB:
         return rows
 
     def crear_tipo_salida(self, tipo: str) -> int:
-        return self._insert(
-            f"INSERT INTO maestra_tipos_salida (tipo_salida, estado) VALUES ({self._ph()},{self._ph()})",
-            (tipo, "HABILITADA"),
+        return self._con_manejo_duplicado(
+            lambda: self._insert(
+                f"INSERT INTO maestra_tipos_salida (tipo_salida, estado) VALUES ({self._ph()},{self._ph()})",
+                (tipo, "HABILITADA"),
+            ),
+            "el tipo de salida", tipo,
         )
 
     def actualizar_tipo_salida(self, id_: int, tipo: str, estado: str):
         ph = self._ph()
-        self._execute(
-            f"UPDATE maestra_tipos_salida SET tipo_salida={ph}, estado={ph} WHERE id={ph}",
-            (tipo, estado, id_),
+        self._con_manejo_duplicado(
+            lambda: self._execute(
+                f"UPDATE maestra_tipos_salida SET tipo_salida={ph}, estado={ph} WHERE id={ph}",
+                (tipo, estado, id_),
+            ),
+            "el tipo de salida", tipo,
         )
         self.commit()
 
@@ -1743,35 +1834,41 @@ class KardexDB:
 
     def crear_sustancia(self, datos: dict) -> int:
         ph = self._ph()
-        return self._insert(
-            f"""INSERT INTO maestra_sustancias
-                (codigo, nombre, propiedad, tipo_muestras, uso_previsto,
-                 cantidad_minima, codigo_sistema, estado)
-                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
-            (
-                datos["codigo"], datos["nombre"],
-                datos.get("propiedad"), datos.get("tipo_muestras"),
-                datos.get("uso_previsto"),
-                float(datos.get("cantidad_minima") or 0),
-                datos.get("codigo_sistema"),
-                "HABILITADA",
+        return self._con_manejo_duplicado(
+            lambda: self._insert(
+                f"""INSERT INTO maestra_sustancias
+                    (codigo, nombre, propiedad, tipo_muestras, uso_previsto,
+                     cantidad_minima, codigo_sistema, estado)
+                    VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
+                (
+                    datos["codigo"], datos["nombre"],
+                    datos.get("propiedad"), datos.get("tipo_muestras"),
+                    datos.get("uso_previsto"),
+                    float(datos.get("cantidad_minima") or 0),
+                    datos.get("codigo_sistema"),
+                    "HABILITADA",
+                ),
             ),
+            "el código", datos.get("codigo"),
         )
 
     def actualizar_sustancia(self, id_s: int, datos: dict):
         ph = self._ph()
-        self._execute(
-            f"""UPDATE maestra_sustancias SET
-                codigo={ph}, nombre={ph}, propiedad={ph}, tipo_muestras={ph},
-                uso_previsto={ph}, cantidad_minima={ph}, codigo_sistema={ph}
-                WHERE id={ph}""",
-            (
-                datos["codigo"], datos["nombre"],
-                datos.get("propiedad"), datos.get("tipo_muestras"),
-                datos.get("uso_previsto"),
-                float(datos.get("cantidad_minima") or 0),
-                datos.get("codigo_sistema"), id_s,
+        self._con_manejo_duplicado(
+            lambda: self._execute(
+                f"""UPDATE maestra_sustancias SET
+                    codigo={ph}, nombre={ph}, propiedad={ph}, tipo_muestras={ph},
+                    uso_previsto={ph}, cantidad_minima={ph}, codigo_sistema={ph}
+                    WHERE id={ph}""",
+                (
+                    datos["codigo"], datos["nombre"],
+                    datos.get("propiedad"), datos.get("tipo_muestras"),
+                    datos.get("uso_previsto"),
+                    float(datos.get("cantidad_minima") or 0),
+                    datos.get("codigo_sistema"), id_s,
+                ),
             ),
+            "el código", datos.get("codigo"),
         )
         self.commit()
 
@@ -1988,12 +2085,31 @@ class KardexDB:
             return None
         return float(row.get("cantidad_actual") or 0)
 
-    def actualizar_stock(self, id_inventario: int, nueva_cantidad: float):
+    def actualizar_stock(
+        self,
+        id_inventario: int,
+        nueva_cantidad: float,
+        valor_esperado: float = None,
+        commit: bool = True,
+    ):
         """Actualiza cantidad_actual (y la columna 'stock' legible = envases x
         presentacion) y deriva ACTIVO/AGOTADO segun corresponda. Un lote ya
         ANULADO no se "revive": solo se ajusta cantidad_actual/stock, sin
         tocar su estado (ej. al restaurar stock de una salida anulada en
-        cascada junto con la entrada que la origino)."""
+        cascada junto con la entrada que la origino).
+
+        valor_esperado (opcional): la cantidad_actual que el llamador leyo
+        justo antes de calcular nueva_cantidad. Si se pasa, el UPDATE queda
+        condicionado (WHERE cantidad_actual todavia == valor_esperado) -- una
+        escritura optimista/compare-and-swap. Cada get_db() abre su propia
+        conexion sin bloqueo compartido, asi que sin esto dos operaciones
+        concurrentes sobre el mismo lote (ej. dos salidas del mismo frasco
+        casi al mismo tiempo) podian leer el mismo stock de partida y la
+        segunda en escribir pisaba silenciosamente el descuento de la
+        primera, dejando el stock incorrecto sin ningun error. Si el UPDATE
+        no afecta ninguna fila es porque el valor cambio entre la lectura y
+        la escritura; se lanza ValueError en vez de continuar como si nada.
+        """
         ph = self._ph()
         actual = self._fetchone(
             f"SELECT estado, presentacion FROM log_inventario WHERE id={ph}", (id_inventario,)
@@ -2004,17 +2120,26 @@ class KardexDB:
             pres = 0
         stock = nueva_cantidad * pres if pres > 0 else nueva_cantidad
         if str((actual or {}).get("estado") or "").upper() == "ANULADO":
-            self._execute(
-                f"UPDATE log_inventario SET cantidad_actual={ph}, stock={ph} WHERE id={ph}",
-                (nueva_cantidad, stock, id_inventario),
-            )
+            sql = f"UPDATE log_inventario SET cantidad_actual={ph}, stock={ph} WHERE id={ph}"
+            params = [nueva_cantidad, stock, id_inventario]
         else:
             estado = "AGOTADO" if nueva_cantidad <= 0 else "ACTIVO"
-            self._execute(
-                f"UPDATE log_inventario SET cantidad_actual={ph}, stock={ph}, estado={ph} WHERE id={ph}",
-                (nueva_cantidad, stock, estado, id_inventario),
+            sql = f"UPDATE log_inventario SET cantidad_actual={ph}, stock={ph}, estado={ph} WHERE id={ph}"
+            params = [nueva_cantidad, stock, estado, id_inventario]
+
+        if valor_esperado is not None:
+            sql += f" AND ABS(cantidad_actual - {ph}) <= {ph}"
+            params += [valor_esperado, EPSILON_STOCK]
+
+        cur = self._execute(sql, tuple(params))
+        if valor_esperado is not None and cur.rowcount == 0:
+            self._conn.rollback()
+            raise ValueError(
+                "El stock de este item fue modificado por otra operación mientras "
+                "se procesaba esta acción. Actualice la pantalla e intente de nuevo."
             )
-        self.commit()
+        if commit:
+            self.commit()
 
     def anular_inventario(self, id_inv: int):
         ph = self._ph()
@@ -2091,7 +2216,7 @@ class KardexDB:
             r.setdefault("estado", "ACTIVA")
         return rows
 
-    def crear_salida(self, datos: dict, id_usuario: int) -> int:
+    def crear_salida(self, datos: dict, id_usuario: int, commit: bool = True) -> int:
         """
         Crea un movimiento de salida. Valida stock suficiente.
         datos debe incluir: id_inventario, id_tipo_salida, cantidad.
@@ -2102,37 +2227,61 @@ class KardexDB:
         (mas abajo, seccion PRESTAMOS) para registrar la salida generada por un
         prestamo aceptado. Extraer su validacion/ajuste de stock implicaria
         tocar la maquina de estados de prestamos, que quedo fuera de esta pasada.
+
+        El INSERT y el descuento de stock se hacen atomicamente, con el
+        descuento condicionado al stock leido aqui
+        (actualizar_stock(valor_esperado=...)): si otra operacion concurrente
+        ya modifico el stock de este lote entre la lectura y la escritura, se
+        revierte todo -- ni la salida ni el descuento quedan a medias -- en
+        vez de insertar el movimiento y luego pisar en silencio el stock con
+        un valor calculado sobre datos obsoletos.
+
+        commit=False permite que responder_prestamo() incluya este INSERT y
+        su ajuste de stock dentro de SU PROPIA transaccion mas amplia (junto
+        con la transicion de estado del prestamo), en vez de que esto quede
+        confirmado por separado antes de saber si el resto de la operacion
+        tuvo exito.
         """
         ph = self._ph()
+        id_inv = datos.get("id_inventario") or datos.get("id_entrada")
         inv = self._fetchone(
             f"SELECT cantidad_actual FROM log_inventario WHERE id={ph}",
-            (datos.get("id_inventario") or datos.get("id_entrada"),),
+            (id_inv,),
         )
-        id_inv = datos.get("id_inventario") or datos.get("id_entrada")
-        if not inv or (inv["cantidad_actual"] or 0) < float(datos["cantidad"]) - EPSILON_STOCK:
+        stock_leido = (inv["cantidad_actual"] or 0) if inv else 0
+        if not inv or stock_leido < float(datos["cantidad"]) - EPSILON_STOCK:
             raise ValueError("Stock insuficiente para realizar la salida.")
 
-        id_salida = self._insert(
-            f"""INSERT INTO log_salidas
-                (id_inventario, id_tipo_salida, id_usuario,
-                 fecha_hora, cantidad, observacion,
-                 estado, actividad, fecha_salida, factura)
-                VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
-            (
-                id_inv,
-                datos["id_tipo_salida"],
-                id_usuario,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                float(datos["cantidad"]),
-                datos.get("observacion"),
-                "ACTIVA",
-                datos.get("actividad"),
-                datos.get("fecha_salida"),
-                datos.get("factura"),
-            ),
-        )
-        nueva = max(0.0, (inv["cantidad_actual"] or 0) - float(datos["cantidad"]))
-        self.actualizar_stock(id_inv, nueva)
+        def _crear():
+            self._execute(
+                f"""INSERT INTO log_salidas
+                    (id_inventario, id_tipo_salida, id_usuario,
+                     fecha_hora, cantidad, observacion,
+                     estado, actividad, fecha_salida, factura)
+                    VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})""",
+                (
+                    id_inv,
+                    datos["id_tipo_salida"],
+                    id_usuario,
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    float(datos["cantidad"]),
+                    datos.get("observacion"),
+                    "ACTIVA",
+                    datos.get("actividad"),
+                    datos.get("fecha_salida"),
+                    datos.get("factura"),
+                ),
+            )
+            id_salida = self._last_insert_id()
+            nueva = max(0.0, stock_leido - float(datos["cantidad"]))
+            self.actualizar_stock(id_inv, nueva, valor_esperado=stock_leido, commit=False)
+            return id_salida
+
+        if commit:
+            with self._transaccion():
+                id_salida = _crear()
+        else:
+            id_salida = _crear()
         return id_salida
 
     def get_salida(self, id_salida: int) -> Optional[dict]:
@@ -2352,7 +2501,17 @@ class KardexDB:
         observacion_recibo: str = "",
         id_usuario_accion: int = None,
     ) -> tuple:
-        """Acepta o rechaza un préstamo pendiente. Devuelve (bool, mensaje)."""
+        """Acepta o rechaza un préstamo pendiente. Devuelve (bool, mensaje).
+
+        La creación de la salida (si se acepta), el ajuste de stock y la
+        transición de estado del préstamo se confirman como una sola unidad
+        (ver _transaccion), y el UPDATE final queda condicionado a que el
+        préstamo siga en el mismo estado leído arriba. Sin esto, dos
+        respuestas casi simultáneas al mismo préstamo pendiente (doble clic,
+        u otro usuario) podían pasar ambas la validación inicial y generar
+        dos salidas/descuentos de stock para un solo préstamo, o pisar en
+        silencio el resultado de la primera con el de la segunda.
+        """
         ph = self._ph()
         prestamo = self._fetchone(
             f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,)
@@ -2365,61 +2524,69 @@ class KardexDB:
         if int(prestamo.get("id_usuario_destino") or 0) != int(id_usuario_recibe or 0):
             return False, "El préstamo no corresponde al usuario autenticado."
 
-        if aceptar:
-            cantidad_contenido = float(prestamo.get("cantidad", 0) or 0)
-            inv = self._fetchone(
-                f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
-                (prestamo["id_inventario"],),
-            )
-            if not inv:
-                return False, "No se encontró el inventario asociado al préstamo."
-            presentacion = float(inv.get("presentacion") or 1)
-            if presentacion <= 0:
-                presentacion = 1.0
-            cantidad_envases = cantidad_contenido / presentacion
-            disponible_envases = float(inv.get("cantidad_actual") or 0)
-            if cantidad_envases <= 0:
-                return False, "La cantidad del préstamo debe ser mayor a cero."
-            if cantidad_envases > disponible_envases + EPSILON_STOCK:
-                return False, "Stock insuficiente para aceptar el préstamo."
+        try:
+            with self._transaccion():
+                if aceptar:
+                    cantidad_contenido = float(prestamo.get("cantidad", 0) or 0)
+                    inv = self._fetchone(
+                        f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
+                        (prestamo["id_inventario"],),
+                    )
+                    if not inv:
+                        raise ValueError("No se encontró el inventario asociado al préstamo.")
+                    presentacion = float(inv.get("presentacion") or 1)
+                    if presentacion <= 0:
+                        presentacion = 1.0
+                    cantidad_envases = cantidad_contenido / presentacion
+                    disponible_envases = float(inv.get("cantidad_actual") or 0)
+                    if cantidad_envases <= 0:
+                        raise ValueError("La cantidad del préstamo debe ser mayor a cero.")
+                    if cantidad_envases > disponible_envases + EPSILON_STOCK:
+                        raise ValueError("Stock insuficiente para aceptar el préstamo.")
 
-            # Crear salida por el préstamo
-            id_salida = self.crear_salida(
-                {
-                    "id_inventario": prestamo["id_inventario"],
-                    "id_tipo_salida": self._get_tipo_salida_prestamo(),
-                    "cantidad": cantidad_envases,
-                    "actividad": f"PRESTAMO A USUARIO ID {id_usuario_recibe}",
-                    "observacion": observacion_recibo,
-                },
-                id_usuario_accion or id_usuario_recibe,
-            )
-            nuevo_estado = "RECIBIDO"
-            nuevo_est_dev = "PENDIENTE"
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self._execute(
-                f"""UPDATE log_prestamos SET
-                    estado={ph}, estado_recepcion={ph}, estado_devolucion={ph},
-                    fecha_recepcion={ph}, observacion_recepcion={ph},
-                    id_usuario_recibe={ph}, id_salida_prestamo={ph}
-                    WHERE id={ph}""",
-                (
-                    nuevo_estado, nuevo_estado, nuevo_est_dev,
-                    now, observacion_recibo,
-                    id_usuario_recibe, id_salida,
-                    id_prestamo,
-                ),
-            )
-        else:
-            nuevo_estado = "RECHAZADO"
-            self._execute(
-                f"""UPDATE log_prestamos SET
-                    estado={ph}, estado_recepcion={ph},
-                    id_usuario_recibe={ph}, observacion_recepcion={ph}
-                    WHERE id={ph}""",
-                (nuevo_estado, nuevo_estado, id_usuario_recibe, observacion_recibo, id_prestamo),
-            )
-        self.commit()
+                    # Crear salida por el préstamo (commit=False: se confirma
+                    # junto con la transicion de estado de mas abajo)
+                    id_salida = self.crear_salida(
+                        {
+                            "id_inventario": prestamo["id_inventario"],
+                            "id_tipo_salida": self._get_tipo_salida_prestamo(),
+                            "cantidad": cantidad_envases,
+                            "actividad": f"PRESTAMO A USUARIO ID {id_usuario_recibe}",
+                            "observacion": observacion_recibo,
+                        },
+                        id_usuario_accion or id_usuario_recibe,
+                        commit=False,
+                    )
+                    nuevo_estado = "RECIBIDO"
+                    nuevo_est_dev = "PENDIENTE"
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cur = self._execute(
+                        f"""UPDATE log_prestamos SET
+                            estado={ph}, estado_recepcion={ph}, estado_devolucion={ph},
+                            fecha_recepcion={ph}, observacion_recepcion={ph},
+                            id_usuario_recibe={ph}, id_salida_prestamo={ph}
+                            WHERE id={ph} AND estado={ph}""",
+                        (
+                            nuevo_estado, nuevo_estado, nuevo_est_dev,
+                            now, observacion_recibo,
+                            id_usuario_recibe, id_salida,
+                            id_prestamo, estado_actual,
+                        ),
+                    )
+                else:
+                    nuevo_estado = "RECHAZADO"
+                    cur = self._execute(
+                        f"""UPDATE log_prestamos SET
+                            estado={ph}, estado_recepcion={ph},
+                            id_usuario_recibe={ph}, observacion_recepcion={ph}
+                            WHERE id={ph} AND estado={ph}""",
+                        (nuevo_estado, nuevo_estado, id_usuario_recibe, observacion_recibo,
+                         id_prestamo, estado_actual),
+                    )
+                if cur.rowcount == 0:
+                    raise ValueError("Este préstamo ya fue respondido.")
+        except ValueError as e:
+            return False, str(e)
         return True, "Préstamo procesado correctamente."
 
     def devolver_prestamo(
@@ -2429,7 +2596,15 @@ class KardexDB:
         observacion_devolucion: str = "",
         id_usuario_accion: int = None,
     ) -> tuple:
-        """Registra la devolución de un préstamo recibido."""
+        """Registra la devolución de un préstamo recibido.
+
+        El reintegro de stock y la transición de estado se hacen en una sola
+        transacción, con el UPDATE de estado condicionado a que siga en
+        estado_devolucion != 'DEVUELTO' (comparar-y-escribir): así, si dos
+        devoluciones del mismo préstamo se disparan casi al mismo tiempo
+        (doble clic, u otro usuario), la segunda se rechaza en vez de
+        reintegrar el stock dos veces y pisar el registro de quién devolvió.
+        """
         ph = self._ph()
         prestamo = self._fetchone(
             f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,)
@@ -2448,25 +2623,35 @@ class KardexDB:
             f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
             (prestamo["id_inventario"],),
         )
-        if inv:
-            presentacion = float(inv.get("presentacion") or 1)
-            if presentacion <= 0:
-                presentacion = 1.0
-            cantidad_envases = cantidad_contenido / presentacion
-            nueva = float(inv.get("cantidad_actual") or 0) + cantidad_envases
-            self.actualizar_stock(prestamo["id_inventario"], nueva)
 
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self._execute(
-            f"""UPDATE log_prestamos SET
-                estado={ph}, estado_devolucion={ph},
-                fecha_devolucion={ph}, observacion_devolucion={ph},
-                id_usuario_devuelve={ph}
-                WHERE id={ph}""",
-            ("DEVUELTO", "DEVUELTO", now, observacion_devolucion,
-             id_usuario_devuelve, id_prestamo),
-        )
-        self.commit()
+        try:
+            with self._transaccion():
+                if inv:
+                    presentacion = float(inv.get("presentacion") or 1)
+                    if presentacion <= 0:
+                        presentacion = 1.0
+                    cantidad_envases = cantidad_contenido / presentacion
+                    stock_leido = float(inv.get("cantidad_actual") or 0)
+                    nueva = stock_leido + cantidad_envases
+                    self.actualizar_stock(
+                        prestamo["id_inventario"], nueva,
+                        valor_esperado=stock_leido, commit=False,
+                    )
+
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cur = self._execute(
+                    f"""UPDATE log_prestamos SET
+                        estado={ph}, estado_devolucion={ph},
+                        fecha_devolucion={ph}, observacion_devolucion={ph},
+                        id_usuario_devuelve={ph}
+                        WHERE id={ph} AND estado_devolucion != {ph}""",
+                    ("DEVUELTO", "DEVUELTO", now, observacion_devolucion,
+                     id_usuario_devuelve, id_prestamo, "DEVUELTO"),
+                )
+                if cur.rowcount == 0:
+                    raise ValueError("Este préstamo ya fue devuelto.")
+        except ValueError as e:
+            return False, str(e)
         return True, "Devolución registrada correctamente."
 
     def _get_tipo_salida_prestamo(self) -> Optional[int]:
@@ -2478,40 +2663,66 @@ class KardexDB:
     def actualizar_prestamo_entrega(
         self, id_prestamo: int, id_usuario_entregador: int, firma_entregado_por: str
     ) -> None:
-        """Firma 'Entregado por' → estado=PRESTADO y descuenta stock."""
+        """Firma 'Entregado por' → estado=PRESTADO y descuenta stock.
+
+        Revalida el estado aqui (ademas de en logica.prestamos_logica.firmar_entrega)
+        porque entre esa validacion y esta llamada puede haber pasado otra firma de
+        entrega para el mismo prestamo (doble clic, u otro usuario en la app
+        compartida). Si ya no esta en SOLICITADO, se rechaza en vez de seguir
+        adelante en silencio: seguir adelante pisaba id_usuario_entregador/
+        firma_entregado_por/fecha_recepcion con los datos de la segunda llamada,
+        corrompiendo el registro de quien entrego realmente el prestamo.
+        """
         ph = self._ph()
         prestamo = self._fetchone(f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,))
-        if prestamo and prestamo.get("estado") == "SOLICITADO":
-            cantidad_contenido = float(prestamo.get("cantidad", 0) or 0)
-            inv = self._fetchone(
-                f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
-                (prestamo["id_inventario"],),
+        if not prestamo:
+            raise ValueError("Préstamo no encontrado.")
+        if prestamo.get("estado") != "SOLICITADO":
+            raise ValueError(
+                "El préstamo ya no está en estado SOLICITADO "
+                "(es posible que ya haya sido entregado por otro usuario)."
             )
-            if not inv:
-                raise ValueError("No se encontró el inventario asociado al préstamo.")
-            presentacion = float(inv.get("presentacion") or 1)
-            if presentacion <= 0:
-                presentacion = 1.0
-            cantidad_envases = cantidad_contenido / presentacion
-            disponible_envases = float(inv.get("cantidad_actual") or 0)
-            if cantidad_envases <= 0:
-                raise ValueError("La cantidad del préstamo debe ser mayor a cero.")
-            if cantidad_envases > disponible_envases + EPSILON_STOCK:
-                raise ValueError(
-                    "Stock insuficiente para entregar el préstamo. "
-                    f"Disponible: {round(disponible_envases * presentacion, 4)}"
-                )
-            nueva = max(0.0, disponible_envases - cantidad_envases)
-            self.actualizar_stock(prestamo["id_inventario"], nueva)
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self._execute(
-            f"""UPDATE log_prestamos SET
-                estado={ph}, id_usuario_entregador={ph},
-                firma_entregado_por={ph}, fecha_recepcion={ph}
-                WHERE id={ph}""",
-            ("PRESTADO", id_usuario_entregador, firma_entregado_por, now[:10], id_prestamo),
+
+        cantidad_contenido = float(prestamo.get("cantidad", 0) or 0)
+        inv = self._fetchone(
+            f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
+            (prestamo["id_inventario"],),
         )
-        self.commit()
+        if not inv:
+            raise ValueError("No se encontró el inventario asociado al préstamo.")
+        presentacion = float(inv.get("presentacion") or 1)
+        if presentacion <= 0:
+            presentacion = 1.0
+        cantidad_envases = cantidad_contenido / presentacion
+        disponible_envases = float(inv.get("cantidad_actual") or 0)
+        if cantidad_envases <= 0:
+            raise ValueError("La cantidad del préstamo debe ser mayor a cero.")
+        if cantidad_envases > disponible_envases + EPSILON_STOCK:
+            raise ValueError(
+                "Stock insuficiente para entregar el préstamo. "
+                f"Disponible: {round(disponible_envases * presentacion, 4)}"
+            )
+        nueva = max(0.0, disponible_envases - cantidad_envases)
+
+        with self._transaccion():
+            self.actualizar_stock(
+                prestamo["id_inventario"], nueva,
+                valor_esperado=disponible_envases, commit=False,
+            )
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cur = self._execute(
+                f"""UPDATE log_prestamos SET
+                    estado={ph}, id_usuario_entregador={ph},
+                    firma_entregado_por={ph}, fecha_recepcion={ph}
+                    WHERE id={ph} AND estado={ph}""",
+                ("PRESTADO", id_usuario_entregador, firma_entregado_por, now[:10],
+                 id_prestamo, "SOLICITADO"),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(
+                    "El préstamo ya no está en estado SOLICITADO "
+                    "(es posible que ya haya sido entregado por otro usuario)."
+                )
 
     def actualizar_prestamo_detalle(self, id_prestamo: int, datos: dict) -> None:
         """Actualiza los campos de detalle de uso (Analista, ensayo, cantidad mg, etc.).
@@ -2557,34 +2768,60 @@ class KardexDB:
         id_usuario_verificador: int,
         firma_verificador: str,
     ) -> None:
-        """Firma 'Verificado el Recibido' → estado=DEVUELTO y reintegra stock."""
+        """Firma 'Verificado el Recibido' → estado=DEVUELTO y reintegra stock.
+
+        Revalida el estado y condiciona el UPDATE final a que siga en PRESTADO
+        (mismo motivo que actualizar_prestamo_entrega): sin esto, una segunda
+        llamada sobre el mismo prestamo (doble clic / otra persona) pasaba de
+        largo la reintegracion de stock pero igual pisaba en silencio
+        fecha_devolucion/id_usuario_verificador/firma_verificador con los
+        datos de la segunda llamada.
+        """
         ph = self._ph()
         prestamo = self._fetchone(f"SELECT * FROM log_prestamos WHERE id={ph}", (id_prestamo,))
-        if prestamo and prestamo.get("estado") == "PRESTADO":
-            cantidad_prestada = float(prestamo.get("cantidad") or 0)
-            cantidad_consumida = max(0.0, float(prestamo.get("cantidad_mg") or 0))
-            # Solo se reintegra lo que no fue consumido en el ensayo;
-            # si no se registró consumo, se devuelve todo.
-            cantidad_devuelta = max(0.0, cantidad_prestada - cantidad_consumida)
-            inv = self._fetchone(
-                f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
-                (prestamo["id_inventario"],),
+        if not prestamo:
+            raise ValueError("Préstamo no encontrado.")
+        if prestamo.get("estado") != "PRESTADO":
+            raise ValueError(
+                "El préstamo ya no está en estado PRESTADO "
+                "(es posible que ya haya sido devuelto por otro usuario)."
             )
+
+        cantidad_prestada = float(prestamo.get("cantidad") or 0)
+        cantidad_consumida = max(0.0, float(prestamo.get("cantidad_mg") or 0))
+        # Solo se reintegra lo que no fue consumido en el ensayo;
+        # si no se registró consumo, se devuelve todo.
+        cantidad_devuelta = max(0.0, cantidad_prestada - cantidad_consumida)
+        inv = self._fetchone(
+            f"SELECT cantidad_actual, presentacion FROM log_inventario WHERE id={ph}",
+            (prestamo["id_inventario"],),
+        )
+
+        with self._transaccion():
             if inv and cantidad_devuelta > 0:
                 presentacion = float(inv.get("presentacion") or 1)
                 if presentacion <= 0:
                     presentacion = 1.0
                 cantidad_envases_devueltos = cantidad_devuelta / presentacion
-                nueva = float(inv.get("cantidad_actual") or 0) + cantidad_envases_devueltos
-                self.actualizar_stock(prestamo["id_inventario"], nueva)
-        self._execute(
-            f"""UPDATE log_prestamos SET
-                estado={ph}, fecha_devolucion={ph},
-                id_usuario_verificador={ph}, firma_verificador={ph}
-                WHERE id={ph}""",
-            ("DEVUELTO", fecha_devolucion, id_usuario_verificador, firma_verificador, id_prestamo),
-        )
-        self.commit()
+                stock_leido = float(inv.get("cantidad_actual") or 0)
+                nueva = stock_leido + cantidad_envases_devueltos
+                self.actualizar_stock(
+                    prestamo["id_inventario"], nueva,
+                    valor_esperado=stock_leido, commit=False,
+                )
+            cur = self._execute(
+                f"""UPDATE log_prestamos SET
+                    estado={ph}, fecha_devolucion={ph},
+                    id_usuario_verificador={ph}, firma_verificador={ph}
+                    WHERE id={ph} AND estado={ph}""",
+                ("DEVUELTO", fecha_devolucion, id_usuario_verificador, firma_verificador,
+                 id_prestamo, "PRESTADO"),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(
+                    "El préstamo ya no está en estado PRESTADO "
+                    "(es posible que ya haya sido devuelto por otro usuario)."
+                )
 
     # ══════════════════════════════════════════════════════════════════════
     # CHECKS CECIF y CLIENTES

@@ -85,9 +85,10 @@ def actualizar(id_salida, cambios, usuario="SISTEMA"):
             common.to_float(cambios["cantidad"]) if cambios.get("cantidad") is not None else cantidad_orig
         )
 
-        disponible_destino = db.get_stock_actual(id_inv_nuevo)
-        if disponible_destino is None:
+        stock_destino_leido = db.get_stock_actual(id_inv_nuevo)
+        if stock_destino_leido is None:
             raise ValueError("No se encontro el lote de inventario indicado.")
+        disponible_destino = stock_destino_leido
         if id_inv_nuevo == id_inv_orig:
             # La cantidad de la salida original "vuelve" a estar disponible
             # para efectos de esta validacion (se esta reemplazando, no sumando).
@@ -99,13 +100,23 @@ def actualizar(id_salida, cambios, usuario="SISTEMA"):
                 f"Disponible: {round(disponible_destino, 4)}"
             )
 
-        # Validacion superada: recien ahora se muta el stock.
+        # Validacion superada: recien ahora se muta el stock. valor_esperado
+        # protege cada escritura contra otra operacion concurrente sobre el
+        # mismo lote (ver actualizar_stock); si el lote cambio entre la
+        # lectura de arriba y este punto, se aborta con un error claro en vez
+        # de sobrescribir en silencio el cambio de la otra operacion.
         if id_inv_nuevo == id_inv_orig:
-            db.actualizar_stock(id_inv_orig, max(0.0, disponible_destino - cantidad_nueva))
+            db.actualizar_stock(
+                id_inv_orig, max(0.0, disponible_destino - cantidad_nueva),
+                valor_esperado=stock_destino_leido,
+            )
         else:
             stock_orig = db.get_stock_actual(id_inv_orig) or 0
-            db.actualizar_stock(id_inv_orig, stock_orig + cantidad_orig)
-            db.actualizar_stock(id_inv_nuevo, max(0.0, disponible_destino - cantidad_nueva))
+            db.actualizar_stock(id_inv_orig, stock_orig + cantidad_orig, valor_esperado=stock_orig)
+            db.actualizar_stock(
+                id_inv_nuevo, max(0.0, disponible_destino - cantidad_nueva),
+                valor_esperado=stock_destino_leido,
+            )
 
         db.actualizar_salida(id_salida, {
             "id_inventario": id_inv_nuevo,
@@ -140,7 +151,8 @@ def anular_con_conexion(db, id_salida):
     stock_actual = db.get_stock_actual(salida["id_inventario"])
     if stock_actual is not None:
         db.actualizar_stock(
-            salida["id_inventario"], stock_actual + common.to_float(salida.get("cantidad"))
+            salida["id_inventario"], stock_actual + common.to_float(salida.get("cantidad")),
+            valor_esperado=stock_actual,
         )
 
 

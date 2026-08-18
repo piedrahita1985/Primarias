@@ -13,9 +13,12 @@ from logica import check_logica as chk
 from logica import movimientos_common as common
 from UI._mov_utils import (
     apply_default_window,
+    bind_horizontal_wheel_scroll,
+    configure_row_stripes,
     draw_title,
     get_date_value,
     make_date_widget,
+    style_treeview,
 )
 
 try:
@@ -254,9 +257,7 @@ class HistCheckListWindow(tk.Toplevel):
         self.tree = ttk.Treeview(
             self._table_wrap, columns=cols, show="headings", height=16,
         )
-        style = ttk.Style(self)
-        style.configure("Treeview", rowheight=24, font=("Segoe UI", 9))
-        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
+        style_treeview(self)
 
         sy = ttk.Scrollbar(self._table_wrap, orient="vertical", command=self.tree.yview)
         sx = ttk.Scrollbar(self._table_wrap, orient="horizontal", command=self.tree.xview)
@@ -270,8 +271,8 @@ class HistCheckListWindow(tk.Toplevel):
                               command=lambda c=key: self._sort_column(c, False))
             self.tree.column(key, width=width, anchor="w", minwidth=40, stretch=True)
 
-        self.tree.tag_configure("par",   background="#F0F4FC")
-        self.tree.tag_configure("impar", background="white")
+        configure_row_stripes(self.tree)
+        bind_horizontal_wheel_scroll(self.tree)
 
     # ------------------------------------------------------------------
     # Carga de datos

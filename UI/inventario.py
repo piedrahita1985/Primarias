@@ -3,36 +3,47 @@ from tkinter import ttk
 
 from config.config import COLORS
 from logica import inventario_mov_logica as inv
-from UI._mov_utils import apply_default_window, attach_treeview_sorting, draw_title
+from UI._mov_utils import (
+    apply_default_window,
+    attach_treeview_sorting,
+    bind_button_hover,
+    draw_title,
+)
 from UI._searchable_treeview import SearchableTreeview
 
 
+# Orden: identidad del lote primero, luego el bloque de existencias (stock =
+# cantidad total en la unidad del renglon; cantidad = envases/botellas; ver
+# unidad/presentacion justo al lado para interpretarlos), luego alarmas, y
+# por ultimo el resto de datos descriptivos/administrativos. Antes "stock" y
+# "cantidad" eran las columnas #24 y #25 de 25 -- las mas importantes para
+# revisar de un vistazo quedaban fuera de la pantalla sin scroll horizontal.
 COLUMNS = [
     ("codigo", "Codigo", 90),
+    ("nombre", "Nombre", 170),
+    ("lote", "Lote", 90),
+    ("stock", "Stock", 90),
+    ("unidad", "Unidad", 70),
+    ("cantidad", "Cantidad (Envases)", 160),
+    ("presentacion", "Presentacion", 95),
+    ("alarma_stock", "Alarma Stock", 170),
+    ("alarma_fv", "Alarma FV", 120),
+    ("cantidad_minima", "Cant. Min", 85),
+    ("potencia", "Potencia", 90),
+    ("catalogo", "Catalogo", 110),
+    ("ubicacion", "Ubicacion", 90),
+    ("no_caja", "No Caja", 80),
+    ("condicion_alm", "Cond. Almacenamiento", 220),
     ("propiedad", "Propiedad", 120),
     ("tipo_muestras", "Tipo Muestras", 130),
     ("uso_previsto", "Uso Previsto", 130),
-    ("no_caja", "No Caja", 80),
-    ("ubicacion", "Ubicacion", 90),
-    ("condicion_alm", "Cond. Almacenamiento", 220),
-    ("nombre", "Nombre", 170),
-    ("potencia", "Potencia", 90),
-    ("lote", "Lote", 90),
-    ("catalogo", "Catalogo", 110),
     ("fecha_ingreso", "Fecha Ingreso", 105),
     ("fecha_vencimiento", "Fecha Vencimiento", 115),
-    ("alarma_fv", "Alarma FV", 120),
-    ("unidad", "Unidad", 70),
-    ("presentacion", "Presentacion", 95),
-    ("cantidad_minima", "Cant. Min", 85),
     ("color_refuerzo", "Color Refuerzo", 110),
     ("certificado_anl", "Certificado", 90),
     ("ficha_seguridad", "Ficha Seguridad", 110),
     ("factura_compra", "Factura Compra", 110),
     ("codigo_sistema", "Codigo Sistema", 120),
-    ("alarma_stock", "Alarma Stock", 170),
-    ("stock", "Stock", 80),
-    ("cantidad", "Cantidad", 160),
 ]
 
 
@@ -63,6 +74,7 @@ class InventarioWindow(tk.Toplevel):
         top.pack(fill="x", pady=(0, 6))
 
         tk.Label(top, text="Vista consolidada de inventario (entradas - salidas)", bg=COLORS["secondary"], fg=COLORS["text_dark"], font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(top, text="  (Mayús + rueda del mouse = desplazar horizontalmente)", bg=COLORS["secondary"], fg=COLORS["text_muted"], font=("Segoe UI", 8, "italic")).pack(side="left")
 
         legend = tk.Frame(top, bg=COLORS["secondary"])
         legend.pack(side="left", padx=(18, 0))
@@ -71,8 +83,12 @@ class InventarioWindow(tk.Toplevel):
         tk.Label(legend, text="  OK  ", bg="#DFF7E2", fg="#1E6B2A", font=("Segoe UI", 8, "bold")).pack(side="left")
         tk.Label(legend, text="  BAJO MINIMO  ", bg="#EBD8FF", fg="#5B2A86", font=("Segoe UI", 8, "bold")).pack(side="left", padx=(6, 0))
 
-        tk.Button(top, text="Actualizar", bg=COLORS["primary"], fg="white", font=("Segoe UI", 9, "bold"), relief="flat", bd=0, padx=10, pady=5, cursor="hand2", command=self._load_data).pack(side="right", padx=(0, 6))
-        tk.Button(top, text="Salir", bg="#6C757D", fg="white", font=("Segoe UI", 9, "bold"), relief="flat", bd=0, padx=10, pady=5, cursor="hand2", command=self.destroy).pack(side="right", padx=(0, 6))
+        btn_actualizar = tk.Button(top, text="Actualizar", bg=COLORS["primary"], fg="white", font=("Segoe UI", 9, "bold"), relief="flat", bd=0, padx=10, pady=5, cursor="hand2", command=self._load_data)
+        btn_actualizar.pack(side="right", padx=(0, 6))
+        bind_button_hover(btn_actualizar, COLORS["primary"])
+        btn_salir = tk.Button(top, text="Salir", bg="#6C757D", fg="white", font=("Segoe UI", 9, "bold"), relief="flat", bd=0, padx=10, pady=5, cursor="hand2", command=self.destroy)
+        btn_salir.pack(side="right", padx=(0, 6))
+        bind_button_hover(btn_salir, "#6C757D")
 
         table_frame = tk.Frame(wrap, bg=COLORS["secondary"])
         table_frame.pack(fill="both", expand=True)
@@ -85,10 +101,6 @@ class InventarioWindow(tk.Toplevel):
             search_columns=["codigo", "nombre", "lote", "ubicacion"],
         )
         self.tree.pack(fill="both", expand=True)
-
-        style = ttk.Style(self)
-        style.configure("Treeview", rowheight=25, font=("Segoe UI", 9))
-        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
 
         for key, title, width in COLUMNS:
             self.tree.heading(key, text=title)
@@ -113,12 +125,14 @@ class InventarioWindow(tk.Toplevel):
         self.btn_pag_prev = tk.Button(pag_frame, text="< Anterior",
                                       command=self._prev_page, **btn_style)
         self.btn_pag_prev.pack(side="left", padx=2)
+        bind_button_hover(self.btn_pag_prev, COLORS["primary"])
         self.lbl_page = tk.Label(pag_frame, text="Pagina 1 de 1", bg=COLORS["secondary"],
                                  fg=COLORS["text_dark"], font=("Segoe UI", 9))
         self.lbl_page.pack(side="left", padx=10)
         self.btn_pag_next = tk.Button(pag_frame, text="Siguiente >",
                                       command=self._next_page, **btn_style)
         self.btn_pag_next.pack(side="left", padx=2)
+        bind_button_hover(self.btn_pag_next, COLORS["primary"])
         tk.Label(pag_frame, text="Mostrar:", bg=COLORS["secondary"], fg=COLORS["text_dark"],
                  font=("Segoe UI", 9)).pack(side="left", padx=(15, 4))
         self.combo_page_size = ttk.Combobox(pag_frame, values=[25, 50, 100, 200],
@@ -159,10 +173,11 @@ class InventarioWindow(tk.Toplevel):
         self.tree.clear()
         start = (self._current_page - 1) * self._page_size
         page_rows = self._all_rows[start:start + self._page_size]
-        for row, tag in page_rows:
+        for idx, (row, tag) in enumerate(page_rows):
             values = [row.get(c[0], "") for c in COLUMNS]
             iid = str(row.get("id", ""))
-            self.tree.insert("", "end", iid=iid, values=values, tags=(tag,) if tag else ())
+            fila_tag = tag or ("par" if idx % 2 == 0 else "impar")
+            self.tree.insert("", "end", iid=iid, values=values, tags=(fila_tag,))
         self._update_pagination_buttons()
 
     def _prev_page(self):

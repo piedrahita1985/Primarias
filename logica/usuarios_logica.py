@@ -21,9 +21,24 @@ def autenticar(usuario: str, contrasena: str):
 
 
 def verificar_firma_password(user: dict, ingresada: str) -> bool:
-    """Verifica la contrasena de firma de 'user' (ya cargado en memoria)."""
+    """Verifica la contrasena de firma de 'user' (ya cargado en memoria).
+
+    Si la firma_password almacenada todavia esta en texto plano (cuenta legada)
+    y la verificacion es exitosa, la rehashea en la BD -- mismo patron de
+    migracion perezosa que ya se aplica a la contrasena de login (ver
+    KardexDB.get_usuario_login)."""
     firma_pass = (user or {}).get("permisos", {}).get("firma_password", "")
-    return auth.verify_password(ingresada, firma_pass)
+    if not auth.verify_password(ingresada, firma_pass):
+        return False
+    if firma_pass and not auth.is_hashed(firma_pass) and (user or {}).get("id"):
+        db = get_db()
+        try:
+            nuevo_hash = auth.hash_password(ingresada)
+            db.rehash_firma_password(user["id"], nuevo_hash)
+            user.setdefault("permisos", {})["firma_password"] = nuevo_hash
+        finally:
+            db.close()
+    return True
 
 
 def agregar(registros: list, datos: dict) -> dict:

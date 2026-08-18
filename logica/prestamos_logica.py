@@ -146,7 +146,7 @@ def actualizar_detalle(id_prestamo, datos, usuario_accion="SISTEMA"):
             cantidad_consumida = common.to_float(cantidad_consumida)
             if cantidad_consumida < 0:
                 return False, "La cantidad consumida no puede ser negativa."
-            if cantidad_consumida > cantidad_prestada:
+            if cantidad_consumida > cantidad_prestada + common.EPSILON_STOCK:
                 return False, "La cantidad consumida no puede superar la cantidad prestada."
 
         db.actualizar_prestamo_detalle(id_prestamo, datos)
@@ -173,10 +173,13 @@ def completar_devolucion(id_prestamo, fecha_devolucion, id_usuario_verificador,
             return False, "Préstamo no encontrado."
         if str(prestamo.get("estado", "")).upper() != "PRESTADO":
             return False, "El préstamo no está en estado PRESTADO."
-        db.completar_devolucion_prestamo(
-            id_prestamo, fecha_devolucion,
-            id_usuario_verificador, firma_verificador,
-        )
+        try:
+            db.completar_devolucion_prestamo(
+                id_prestamo, fecha_devolucion,
+                id_usuario_verificador, firma_verificador,
+            )
+        except ValueError as e:
+            return False, str(e)
         bit.registrar_campos(
             tipo_operacion="PRESTAMO-DEVOLUCION",
             id_registro=id_prestamo,
